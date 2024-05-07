@@ -1,0 +1,264 @@
+#! /usr/bin/env python3
+"""Backup using rsync."""
+
+import argparse
+import dataclasses
+import datetime
+import enum
+import pathlib
+import subprocess
+import sys
+from collections.abc import Callable, Iterable
+from typing import NoReturn
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
+
+
+class Logger(enum.Enum):
+    """Log messages."""
+
+    OUTPUT = "\033[32m"  # Green
+    COMMAND = "\033[94m"  # Blue
+    ERROR = "\033[91m"  # Red
+    WARNING = "\033[33m"  # Yellow
+    _RESET = "\033[0m"
+
+    def print(self, text: str) -> None:
+        """Print a log message."""
+        stream = sys.stderr if self in (Logger.ERROR, Logger.WARNING) else sys.stdout
+        if stream.isatty():
+            stream.write(f"{self.value}{text}{Logger._RESET.value}\n")
+        else:
+            stream.write(f"{text}\n")
+
+
+def _system_exit(text: str) -> NoReturn:
+    Logger.ERROR.print(text)
+    raise SystemExit(1)
+
+
+@dataclasses.dataclass
+class Backup:
+    """Backup using rsync."""
+
+    target_location: str
+    source_folders: Iterable[str]
+    exclude: Iterable[str] = ()
+    first_time: bool = False
+    dry_run: bool = False
+    checksum: bool = False
+
+    def __post_init__(self) -> None:
+        """Prepare for backup."""
+        self.folder_list: list[pathlib.Path] = []
+        target_location = pathlib.Path(self.target_location)
+        if not target_location.is_absolute():
+            _system_exit(f"Target location '{target_location}' must be absoluse path.")
+        for source_folder in self.source_folders:
+            if not pathlib.Path(source_folder).is_absolute():
+                _system_exit(f"Source folder '{source_folder}' must be absoluse path.")
+        try:
+            for folder in target_location.iterdir():
+                if not folder.is_dir():
+                    continue
+                try:
+                    date = datetime.date.fromisoformat(folder.name)
+                    iso_date = date.isoformat()
+                    if folder.name != iso_date:
+                        raise ValueError(f"{folder.name} != {iso_date}")
+                except ValueError as ex:
+                    Logger.WARNING.print(
+                        f"Warning: folder {folder}, non ISO date: {ex!r}"
+                    )
+                    continue
+                self.folder_list.append(folder)
+        except OSError as ex:
+            _system_exit(f"Failed reading target location: {ex}")
+
+        today = datetime.date.today()
+        self.today_folder = target_location / str(today)
+        self.log_file = self.today_folder.with_suffix(".log")
+
+    def _print_output(self, text: str, *, log: bool = True) -> None:
+        Logger.OUTPUT.print(text)
+        if log and not self.dry_run:
+            with self.log_file.open(mode="a", encoding="utf-8") as log_file:
+                log_file.write(text + "\n")
+
+    def _print_command(self, text: str) -> None:
+        Logger.COMMAND.print(text)
+        if not self.dry_run:
+            with self.log_file.open(mode="a", encoding="utf-8") as log_file:
+                log_file.write("\n" + text + "\n")
+
+    def _print_error(self, text: str) -> None:
+        Logger.ERROR.print(text)
+        if not self.dry_run:
+            with self.log_file.open(mode="a", encoding="utf-8") as log_file:
+                log_file.write(text + "\n")
+
+    def _run(
+        self, *args: str | pathlib.Path,
+        filter_output: Callable[[bytes], None] | None = None
+    ) -> None:
+        """Run an external command in a subprocess."""
+        str_args = ("/usr/bin/sudo", *(str(arg) for arg in args))
+        self._print_command(" ".join(str_args))
+        if not self.dry_run:
+            proc = subprocess.run(str_args, check=False, capture_output=True)
+            if filter_output is None:
+                if len(proc.stdout) > 0:
+                    self._print_output(proc.stdout.decode("utf8"))
+            else:
+                filter_output(proc.stdout)
+            if len(proc.stderr) > 0:
+                self._print_error(proc.stderr.decode("utf8"))
+            if proc.returncode != 0:
+                self._print_error(f"Return code: {proc.returncode}")
+
+    def _filter_rsync_output(self, output: bytes) -> None:
+        """Filter the output of 'rsync --info=stats2'."""
+        # The output should look something like:
+        #
+        # Number of files: 321,415 (reg: 277,623, dir: 43,413, link: 375, special: 4)
+        # Number of created files: 54 (reg: 43, dir: 11)
+        # Number of deleted files: 18 (reg: 14, dir: 4)
+        # Number of regular files transferred: 239
+        # Total file size: 177.91G bytes
+        # Total transferred file size: 4.45G bytes
+        # Literal data: 4.45G bytes
+        # Matched data: 0 bytes
+        # File list size: 851.87K
+        # File list generation time: 0.001 seconds
+        # File list transfer time: 0.000 seconds
+        # Total bytes sent: 4.46G
+        # Total bytes received: 51.68K
+        #
+        # sent 4.46G bytes  received 51.68K bytes  33.93M bytes/sec
+        # total size is 177.91G  speedup is 39.87
+        for line in output.decode("utf8").split("\n"):
+            if line.startswith((
+                "Number of ",
+                "Total file size:",
+                "Total transferred file size:",
+            )):
+                self._print_output(line, log=False)
+
+    def backup(self) -> None:
+        """Perform the actual backup."""
+        new_day = self.today_folder not in self.folder_list
+
+        if self.first_time:
+            if len(self.folder_list) > 0:
+                _system_exit(
+                    "This is not the first time you are backing up to this folder, "
+                    "remove --first-time"
+                )
+            self._run("/usr/bin/mkdir", self.today_folder)
+
+        elif new_day:
+            # New day - new backup folder:
+            if len(self.folder_list) == 0:
+                _system_exit(
+                    "This is the first time you are backing up to this folder, "
+                    "specify --first-time"
+                )
+            last_folder = max(self.folder_list)
+            self._run("/usr/bin/cp", "-al", last_folder, self.today_folder)
+            self.folder_list.append(self.today_folder)
+
+        rsync_command = [
+            "/usr/bin/rsync", "--archive", "--human-readable", "--info=stats2",
+            f"--log-file={self.log_file}",
+        ]
+        if self.checksum:
+            rsync_command.append("--checksum")
+        rsync_command.extend(f"--exclude={folder}" for folder in self.exclude)
+
+        if new_day:
+            # Start a new day with removing files that do not exist anymore:
+            rsync_command.extend(["--delete", "--delete-excluded"])
+
+        for source_folder in self.source_folders:
+            source_path = pathlib.Path(source_folder)
+            # str(path / "_")[:-1] is to ensure that path ends with a "/".
+            source_folder_str = str(source_path / "_")[:-1]
+            relative_source_folder = source_path.relative_to("/")
+            backup_target_str = str(
+                self.today_folder / relative_source_folder / "_"
+            )[:-1]
+            self._run(
+                *rsync_command, source_folder_str, backup_target_str,
+                filter_output=self. _filter_rsync_output
+            )
+
+        # Commit filesystem caches to disk:
+        self._run("/usr/bin/sync", self.today_folder)
+
+    def purge(self, *, keep: int) -> None:
+        """Purge old backups."""
+        folder_list = sorted(self.folder_list)
+        months = {folder.name[:7] for folder in self.folder_list}
+
+        monthly_backups = 0
+        for folder in folder_list.copy():
+            if folder.name[:7] in months:
+                monthly_backups += 1
+                # self._print_output(f"Kept first backup of the month: {folder.name}")
+                folder_list.pop(folder_list.index(folder))
+                months.remove(folder.name[:7])
+        self._print_output(f"Kept monthly backups: {monthly_backups}")
+
+        while len(folder_list) > keep:
+            self._run("/usr/bin/rm", "-r", folder_list[0])
+            # self._run("/usr/bin/rm", folder_list[0].with_suffix(".log"))
+            folder_list.pop(0)
+        self._print_output(f"Kept daily backups: {len(folder_list)}")
+
+    @classmethod
+    def from_command_line_arguments(cls) -> "Backup":
+        """Initialize a Backup class instance from command line arguments."""
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--config", default="blue-backup.toml")
+        parser.add_argument("--first-time", action="store_true")
+        parser.add_argument("--dry-run", action="store_true")
+        parser.add_argument("--checksum", action="store_true")
+        args = parser.parse_args()
+
+        try:
+            with pathlib.Path(args.config).open(mode="rb") as toml_file:
+                toml_dict = tomllib.load(toml_file)
+        except (OSError, tomllib.TOMLDecodeError) as ex:
+            _system_exit(f"Failed to read {args.config}: {ex}")
+
+        try:
+            target_location: str = toml_dict.pop("target-location")
+            source_folders: str = toml_dict.pop("source-folders")
+            exclude: list[str] = toml_dict.pop("exclude", [])
+        except KeyError as ex:
+            _system_exit(f"Missing in {args.config}: {ex}")
+        for key in toml_dict:
+            Logger.WARNING.print(f"Unknown field in {args.config}: '{key}'")
+
+        return cls(
+            target_location=target_location,
+            source_folders=source_folders,
+            exclude=exclude,
+            first_time=args.first_time,
+            dry_run=args.dry_run,
+            checksum=args.checksum,
+        )
+
+
+def main() -> None:
+    """Backup main entry-point."""
+    backup = Backup.from_command_line_arguments()
+    backup.backup()
+    backup.purge(keep=20)
+
+
+if __name__ == "__main__":
+    main()

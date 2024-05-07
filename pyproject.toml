@@ -1,0 +1,32 @@
+[project]
+name = "blue-backup"
+
+[tool.mypy]
+files = ["*.py"]
+strict = true
+
+[tool.ruff]
+include = ["*.py"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+
+ignore = [
+    "ANN101",  # Missing type annotation for `self` in method
+    "ANN102",  # Missing type annotation for `cls` in classmethod
+    "COM812",  # Trailing comma missing
+    "DTZ011",  # `datetime.date.today()` used
+    "EM102",  # Exception must not use an f-string literal, assign to variable first
+    "ERA001",  # Found commented-out code
+    "FA102",  # Missing `from __future__ import annotations`, but uses PEP 585 union
+    "S603",  # `subprocess` call: check for execution of untrusted input
+    "TRY003",  # Avoid specifying long messages outside the exception class
+    "TRY301",  # Abstract `raise` to an inner function
+]
+
+pydocstyle.convention = "pep257"
+
+[tool.pylint.message_control]
+disable = [
+    "too-many-instance-attributes",
+]
