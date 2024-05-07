@@ -2,11 +2,11 @@
 name = "blue-backup"
 
 [tool.mypy]
-files = ["*.py"]
+files = ["blue-backup"]
 strict = true
 
 [tool.ruff]
-include = ["*.py"]
+include = ["blue-backup"]
 
 [tool.ruff.lint]
 select = ["ALL"]
@@ -29,4 +29,6 @@ pydocstyle.convention = "pep257"
 [tool.pylint.message_control]
 disable = [
     "too-many-instance-attributes",
+    # Module name "blue-backup" doesn't conform to snake_case naming style
+    "invalid-name",
 ]
