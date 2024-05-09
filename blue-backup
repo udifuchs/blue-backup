@@ -5,16 +5,23 @@ import argparse
 import dataclasses
 import datetime
 import enum
+import getpass
+import os
 import pathlib
+import stat
 import subprocess
 import sys
-from collections.abc import Callable, Iterable
-from typing import NoReturn
+from collections.abc import Callable, Iterator
+from typing import BinaryIO, Literal, NoReturn, Sequence, TypeAlias, cast
 
 if sys.version_info >= (3, 11):
     import tomllib
 else:
     import tomli as tomllib
+
+import paramiko
+
+OpenBinaryMode: TypeAlias = Literal["rb", "wb", "ab"]
 
 
 class Logger(enum.Enum):
@@ -40,13 +47,91 @@ def _system_exit(text: str) -> NoReturn:
     raise SystemExit(1)
 
 
+class Process:
+    """Handle local and remote processes and filesystem access.
+
+    For local access, subprocess and pathlib modules are used.
+    For remote access, paramiko's ssh and sftp are used.
+    """
+
+    def __init__(self, target_host: str | None, target_user: str | None) -> None:
+        """Initialize process for remote target_host or for local host."""
+        username = os.getlogin() if target_user is None else target_user
+        self.target_address = "" if target_host is None else f"{username}@{target_host}"
+        self.ssh = None
+        self.sftp = None
+        if target_host is not None:
+            self.ssh = paramiko.SSHClient()
+            self.ssh.load_system_host_keys()
+            password = ""
+            try:
+                try:
+                    self.ssh.connect(target_host, username=target_user)
+                except paramiko.ssh_exception.AuthenticationException:
+                    password = getpass.getpass(f"{self.target_address} password:")
+                    self.ssh.connect(
+                        target_host, username=target_user, password=password
+                    )
+            except (OSError, paramiko.ssh_exception.AuthenticationException) as ex:
+                _system_exit(f"Failed connecting to {target_host}: {ex}")
+            finally:
+                del password
+            self.sftp = self.ssh.open_sftp()
+
+    def get_full_path(self, local_path: pathlib.Path | str) -> str:
+        """Return full path including host address in remote mode."""
+        return (
+            str(local_path) if self.ssh is None
+            else f"{self.target_address}:{local_path}"
+        )
+
+    def iterdir_attr(self, path: str) -> Iterator[paramiko.SFTPAttributes]:
+        """Yield SFTPAttributes objects of the folder content."""
+        if self.sftp is None:
+            for subpath in pathlib.Path(path).iterdir():
+                yield paramiko.SFTPAttributes.from_stat(subpath.stat(), subpath.name)
+        else:
+            yield from self.sftp.listdir_attr(path)
+
+    def run(
+        self, args: Sequence[str], *, force_local: bool = False
+    ) -> subprocess.CompletedProcess[bytes]:
+        """Run the command described by args and wait for it to complete."""
+        if force_local or self.ssh is None:
+            proc = subprocess.run(args, check=False, capture_output=True)
+        else:
+            command = " ".join(args)
+            _ssh_stdin, ssh_stdout, ssh_stderr = self.ssh.exec_command(command)
+            proc = subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout=ssh_stdout.read(),
+                stderr=ssh_stderr.read(),
+            )
+        return proc
+
+    def open(self, filepath: pathlib.Path, mode: OpenBinaryMode) -> BinaryIO:
+        """Open file locally or remotely."""
+        try:
+            if "b" not in mode:
+                _system_exit(f"File '{filepath}' must be opened in binary mode")
+            if self.sftp is None:
+                return filepath.open(mode=mode)
+            sftp_file = self.sftp.file(str(filepath), mode)
+            return cast(BinaryIO, sftp_file)
+        except OSError as ex:
+            _system_exit(f"Failed opening '{self.get_full_path(filepath)}': {ex}")
+
+
 @dataclasses.dataclass
 class Backup:
     """Backup using rsync."""
 
     target_location: str
-    source_folders: Iterable[str]
-    exclude: Iterable[str] = ()
+    target_host: str | None
+    target_user: str | None
+    source_folders: Sequence[str]
+    exclude: Sequence[str] = ()
     first_time: bool = False
     dry_run: bool = False
     checksum: bool = False
@@ -54,70 +139,88 @@ class Backup:
     def __post_init__(self) -> None:
         """Prepare for backup."""
         self.folder_list: list[pathlib.Path] = []
-        target_location = pathlib.Path(self.target_location)
-        if not target_location.is_absolute():
-            _system_exit(f"Target location '{target_location}' must be absoluse path.")
+        target_path = pathlib.Path(self.target_location)
+        if not target_path.is_absolute():
+            _system_exit(f"Target location '{target_path}' must be absoluse path.")
         for source_folder in self.source_folders:
             if not pathlib.Path(source_folder).is_absolute():
                 _system_exit(f"Source folder '{source_folder}' must be absoluse path.")
+
+        self.proc = Process(self.target_host, self.target_user)
+
         try:
-            for folder in target_location.iterdir():
-                if not folder.is_dir():
-                    continue
-                try:
-                    date = datetime.date.fromisoformat(folder.name)
-                    iso_date = date.isoformat()
-                    if folder.name != iso_date:
-                        raise ValueError(f"{folder.name} != {iso_date}")
-                except ValueError as ex:
-                    Logger.WARNING.print(
-                        f"Warning: folder {folder}, non ISO date: {ex!r}"
-                    )
-                    continue
-                self.folder_list.append(folder)
+            for path_attr in self.proc.iterdir_attr(self.target_location):
+                if path_attr.st_mode is not None and stat.S_ISDIR(path_attr.st_mode):
+                    folder_path = target_path / path_attr.filename
+                    try:
+                        date = datetime.date.fromisoformat(folder_path.name)
+                        iso_date = date.isoformat()
+                        if folder_path.name != iso_date:
+                            raise ValueError(f"{folder_path.name} != {iso_date}")
+                    except ValueError as ex:
+                        Logger.WARNING.print(
+                            f"Folder {folder_path.name}, non ISO date: {ex}"
+                        )
+                    else:
+                        self.folder_list.append(folder_path)
         except OSError as ex:
-            _system_exit(f"Failed reading target location: {ex}")
+            _system_exit(
+                "Failed reading target location "
+                f"'{self.proc.get_full_path(self.target_location)}': {ex}"
+            )
 
         today = datetime.date.today()
-        self.today_folder = target_location / str(today)
+        self.today_folder = target_path / str(today)
         self.log_file = self.today_folder.with_suffix(".log")
 
-    def _print_output(self, text: str, *, log: bool = True) -> None:
+    def _print_output(self, text: str, *, to_log_file: bool = True) -> None:
         Logger.OUTPUT.print(text)
-        if log and not self.dry_run:
-            with self.log_file.open(mode="a", encoding="utf-8") as log_file:
-                log_file.write(text + "\n")
+        if to_log_file and not self.dry_run:
+            with self.proc.open(self.log_file, mode="ab") as log_file:
+                log_file.write(f"{text}\n".encode())
 
     def _print_command(self, text: str) -> None:
         Logger.COMMAND.print(text)
         if not self.dry_run:
-            with self.log_file.open(mode="a", encoding="utf-8") as log_file:
-                log_file.write("\n" + text + "\n")
+            with self.proc.open(self.log_file, mode="ab") as log_file:
+                log_file.write(f"\n{text}\n".encode())
 
     def _print_error(self, text: str) -> None:
         Logger.ERROR.print(text)
         if not self.dry_run:
-            with self.log_file.open(mode="a", encoding="utf-8") as log_file:
-                log_file.write(text + "\n")
+            with self.proc.open(self.log_file, mode="ab") as log_file:
+                log_file.write(f"{text}\n".encode())
 
     def _run(
-        self, *args: str | pathlib.Path,
-        filter_output: Callable[[bytes], None] | None = None
-    ) -> None:
+        self,
+        *args: str | pathlib.Path,
+        filter_output: Callable[[bytes], None] | None = None,
+        force_local: bool = False,
+    ) -> int:
         """Run an external command in a subprocess."""
-        str_args = ("/usr/bin/sudo", *(str(arg) for arg in args))
-        self._print_command(" ".join(str_args))
-        if not self.dry_run:
-            proc = subprocess.run(str_args, check=False, capture_output=True)
-            if filter_output is None:
-                if len(proc.stdout) > 0:
-                    self._print_output(proc.stdout.decode("utf8"))
-            else:
-                filter_output(proc.stdout)
-            if len(proc.stderr) > 0:
-                self._print_error(proc.stderr.decode("utf8"))
-            if proc.returncode != 0:
-                self._print_error(f"Return code: {proc.returncode}")
+        if force_local or self.proc.ssh is None:
+            str_args = ("/usr/bin/sudo", *(str(arg) for arg in args))
+            self._print_command(" ".join(str_args))
+        else:
+            str_args = tuple(str(arg) for arg in args)
+            self._print_command(
+                f"""SSH {self.proc.target_address} -c '{" ".join(str_args)}'"""
+            )
+        if self.dry_run:
+            return 0
+
+        proc = self.proc.run(str_args, force_local=force_local)
+        if filter_output is None:
+            if len(proc.stdout) > 0:
+                self._print_output(proc.stdout.decode("utf8"))
+        else:
+            filter_output(proc.stdout)
+        if len(proc.stderr) > 0:
+            self._print_error(proc.stderr.decode("utf8"))
+        if proc.returncode != 0:
+            self._print_error(f"Return code: {proc.returncode}")
+
+        return proc.returncode
 
     def _filter_rsync_output(self, output: bytes) -> None:
         """Filter the output of 'rsync --info=stats2'."""
@@ -145,7 +248,7 @@ class Backup:
                 "Total file size:",
                 "Total transferred file size:",
             )):
-                self._print_output(line, log=False)
+                self._print_output(line, to_log_file=False)
 
     def backup(self) -> None:
         """Perform the actual backup."""
@@ -172,7 +275,10 @@ class Backup:
 
         rsync_command = [
             "/usr/bin/rsync", "--archive", "--human-readable", "--info=stats2",
-            f"--log-file={self.log_file}",
+            # Create all missing path components of the destination path:
+            "--mkpath",
+            # Log to file on the remote (receiver) side:
+            f"--remote-option=--log-file={self.log_file}",
         ]
         if self.checksum:
             rsync_command.append("--checksum")
@@ -190,9 +296,11 @@ class Backup:
             backup_target_str = str(
                 self.today_folder / relative_source_folder / "_"
             )[:-1]
+            backup_target_str = self.proc.get_full_path(backup_target_str)
             self._run(
                 *rsync_command, source_folder_str, backup_target_str,
-                filter_output=self. _filter_rsync_output
+                filter_output=self. _filter_rsync_output,
+                force_local=True,
             )
 
         # Commit filesystem caches to disk:
@@ -232,19 +340,23 @@ class Backup:
             with pathlib.Path(args.config).open(mode="rb") as toml_file:
                 toml_dict = tomllib.load(toml_file)
         except (OSError, tomllib.TOMLDecodeError) as ex:
-            _system_exit(f"Failed to read {args.config}: {ex}")
+            _system_exit(f"Failed to read '{args.config}': {ex}")
 
         try:
             target_location: str = toml_dict.pop("target-location")
+            target_host: str | None = toml_dict.pop("target-host", None)
+            target_user: str | None = toml_dict.pop("target-user", None)
             source_folders: str = toml_dict.pop("source-folders")
             exclude: list[str] = toml_dict.pop("exclude", [])
         except KeyError as ex:
-            _system_exit(f"Missing in {args.config}: {ex}")
+            _system_exit(f"Missing in '{args.config}': {ex}")
         for key in toml_dict:
-            Logger.WARNING.print(f"Unknown field in {args.config}: '{key}'")
+            Logger.WARNING.print(f"Unknown field in '{args.config}': '{key}'")
 
         return cls(
             target_location=target_location,
+            target_host=target_host,
+            target_user=target_user,
             source_folders=source_folders,
             exclude=exclude,
             first_time=args.first_time,

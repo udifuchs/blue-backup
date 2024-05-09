@@ -1,5 +1,9 @@
 [project]
 name = "blue-backup"
+dependencies = [
+    "tomli; python_version<'3.11'",
+    "paramiko",
+]
 
 [tool.mypy]
 files = ["blue-backup"]
@@ -31,4 +35,6 @@ disable = [
     "too-many-instance-attributes",
     # Module name "blue-backup" doesn't conform to snake_case naming style
     "invalid-name",
+    # Import "import paramiko" should be placed at the top of the module
+    "wrong-import-position",
 ]
