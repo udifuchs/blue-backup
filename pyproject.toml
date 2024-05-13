@@ -22,8 +22,8 @@ ignore = [
     "DTZ011",  # `datetime.date.today()` used
     "EM102",  # Exception must not use an f-string literal, assign to variable first
     "ERA001",  # Found commented-out code
-    "FA102",  # Missing `from __future__ import annotations`, but uses PEP 585 union
     "S603",  # `subprocess` call: check for execution of untrusted input
+    "TCH003",  # Move standard library import `...` into a type-checking block
     "TRY003",  # Avoid specifying long messages outside the exception class
     "TRY301",  # Abstract `raise` to an inner function
 ]
