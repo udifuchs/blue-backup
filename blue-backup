@@ -14,7 +14,7 @@ import stat
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
-from typing import BinaryIO, Literal, NoReturn, Sequence, TypeAlias, cast
+from typing import BinaryIO, Literal, Sequence, TypeAlias, cast
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -24,6 +24,10 @@ else:
 import paramiko
 
 OpenBinaryMode: TypeAlias = Literal["rb", "wb", "ab"]
+
+
+class BlueError(Exception):
+    """blue-backup failed."""
 
 
 class Logger(enum.Enum):
@@ -42,11 +46,6 @@ class Logger(enum.Enum):
             stream.write(f"{self.value}{text}{Logger._RESET.value}\n")
         else:
             stream.write(f"{text}\n")
-
-
-def _system_exit(text: str) -> NoReturn:
-    Logger.ERROR.print(text)
-    raise SystemExit(1)
 
 
 class Process:
@@ -78,7 +77,7 @@ class Process:
                     password = getpass.getpass(f"{self.address} password:")
                     self.ssh.connect(hostname, username=username, password=password)
             except (OSError, paramiko.ssh_exception.AuthenticationException) as ex:
-                _system_exit(f"Failed connecting to {hostname}: {ex}")
+                raise BlueError(f"Failed connecting to {hostname}: {ex}") from None
             finally:
                 del password
             self.sftp = self.ssh.open_sftp()
@@ -114,15 +113,17 @@ class Process:
 
     def open(self, filepath: pathlib.Path, mode: OpenBinaryMode) -> BinaryIO:
         """Open file locally or remotely."""
+        if "b" not in mode:
+            raise BlueError(f"File '{filepath}' must be opened in binary mode")
         try:
-            if "b" not in mode:
-                _system_exit(f"File '{filepath}' must be opened in binary mode")
             if self.sftp is None:
                 return filepath.open(mode=mode)
             sftp_file = self.sftp.file(str(filepath), mode)
             return cast(BinaryIO, sftp_file)
         except OSError as ex:
-            _system_exit(f"Failed opening '{self.get_full_path(filepath)}': {ex}")
+            raise BlueError(
+                f"Failed opening '{self.get_full_path(filepath)}': {ex}"
+            ) from None
 
 
 @dataclasses.dataclass
@@ -163,7 +164,7 @@ class Config:
     """Configuration from the TOML file."""
 
     target_location: str
-    backup_folders: tuple[BackupFolder, ...] = ()
+    backup_folders: tuple[BackupFolder, ...]
     exclude: tuple[str, ...] = ()
 
     @classmethod
@@ -173,14 +174,14 @@ class Config:
             with pathlib.Path(filename).open(mode="rb") as toml_file:
                 toml_dict = tomllib.load(toml_file)
         except (OSError, tomllib.TOMLDecodeError) as ex:
-            _system_exit(f"Failed to read '{filename}': {ex}")
+            raise BlueError(f"Failed to read '{filename}': {ex}") from None
 
         try:
             target_location: str = toml_dict.pop("target-location")
             backup_folders: list[str] | dict[str, str] = toml_dict.pop("backup-folders")
             exclude: list[str] = toml_dict.pop("exclude", [])
         except KeyError as ex:
-            _system_exit(f"Missing in '{filename}': {ex}")
+            raise BlueError(f"Missing in '{filename}': {ex}") from None
         for key in toml_dict:
             Logger.WARNING.print(f"Unknown field in '{filename}': '{key}'")
 
@@ -195,7 +196,7 @@ class Config:
                 for source_location, target_folder in backup_folders.items()
             )
         else:
-            _system_exit("'backup-folders' must be an array or a table.")
+            raise BlueError("'backup-folders' must be an array or a table.")
 
         return cls(target_location, backup_folders_conf, tuple(exclude))
 
@@ -223,7 +224,7 @@ class BlueBackup:
         target_address, target_path = self.config.get_address_and_path()
 
         if not target_path.is_absolute():
-            _system_exit(f"Target location '{target_path}' must be absoluse path.")
+            raise BlueError(f"Target location '{target_path}' must be absoluse path.")
 
         self.proc = Process(target_address)
         self.folder_list: list[pathlib.Path] = []
@@ -244,9 +245,9 @@ class BlueBackup:
                     else:
                         self.folder_list.append(folder_path)
         except OSError as ex:
-            _system_exit(
+            raise BlueError(
                 f"Failed reading target location '{self.config.target_location}': {ex}"
-            )
+            ) from None
 
         today = datetime.date.today()
         self.today_folder = target_path / str(today)
@@ -335,7 +336,7 @@ class BlueBackup:
 
         if self.first_time:
             if len(self.folder_list) > 0:
-                _system_exit(
+                raise BlueError(
                     "This is not the first time you are backing up to this folder, "
                     "remove --first-time"
                 )
@@ -344,7 +345,7 @@ class BlueBackup:
         elif new_day:
             # New day - new backup folder:
             if len(self.folder_list) == 0:
-                _system_exit(
+                raise BlueError(
                     "This is the first time you are backing up to this folder, "
                     "specify --first-time"
                 )
@@ -421,9 +422,13 @@ class BlueBackup:
 
 def main() -> None:
     """Backup main entry-point."""
-    backup = BlueBackup.from_command_line_arguments()
-    backup.backup()
-    backup.purge(keep=20)
+    try:
+        backup = BlueBackup.from_command_line_arguments()
+        backup.backup()
+        backup.purge(keep=20)
+    except BlueError as ex:
+        Logger.ERROR.print(str(ex))
+        raise SystemExit(1) from ex
 
 
 if __name__ == "__main__":
