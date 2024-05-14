@@ -76,7 +76,7 @@ class Process:
                 except paramiko.ssh_exception.AuthenticationException:
                     password = getpass.getpass(f"{self.address} password:")
                     self.ssh.connect(hostname, username=username, password=password)
-            except (OSError, paramiko.ssh_exception.AuthenticationException) as ex:
+            except (OSError, paramiko.ssh_exception.SSHException) as ex:
                 raise BlueError(f"Failed connecting to {hostname}: {ex}") from None
             finally:
                 del password
@@ -357,9 +357,12 @@ class BlueBackup:
             "/usr/bin/rsync", "--archive", "--human-readable", "--info=stats2",
             # Create all missing path components of the destination path:
             "--mkpath",
-            # Log to file on the remote (receiver) side:
-            f"--remote-option=--log-file={self.log_file}",
         ]
+        if self.proc.ssh is None:
+            rsync_command.append(f"--log-file={self.log_file}")
+        else:
+            # Log to file on the remote (receiver) side:
+            rsync_command.append(f"--remote-option=--log-file={self.log_file}")
         if self.checksum:
             rsync_command.append("--checksum")
         rsync_command.extend(f"--exclude={folder}" for folder in self.config.exclude)
