@@ -324,7 +324,6 @@ class BlueBackup:
         # total size is 177.91G  speedup is 39.87
         for line in output.decode("utf8").split("\n"):
             if line.startswith((
-                "Number of ",
                 "Total file size:",
                 "Total transferred file size:",
             )):
@@ -406,6 +405,10 @@ class BlueBackup:
             folder_list.pop(0)
         self._print_output(f"Kept daily backups: {len(folder_list)}")
 
+    def disk_space(self) -> None:
+        """Report available disk space in target location."""
+        self._run("/usr/bin/df", "--human-readable", self.today_folder)
+
     @classmethod
     def from_command_line_arguments(cls) -> BlueBackup:
         """Initialize a Backup class instance from command line arguments."""
@@ -429,6 +432,7 @@ def main() -> None:
         backup = BlueBackup.from_command_line_arguments()
         backup.backup()
         backup.purge(keep=20)
+        backup.disk_space()
     except BlueError as ex:
         Logger.ERROR.print(str(ex))
         raise SystemExit(1) from ex
