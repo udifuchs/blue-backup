@@ -14,7 +14,7 @@ import stat
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
-from typing import BinaryIO, Literal, Sequence, TypeAlias, cast
+from typing import BinaryIO, Literal, Sequence, TypeAlias, TypedDict, cast
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -126,6 +126,13 @@ class Process:
             ) from None
 
 
+class FolderInfo(TypedDict, total=False):
+    """Information in RHS of backup folder table."""
+
+    target: str
+    exclude: list[str]
+
+
 @dataclasses.dataclass
 class BackupFolder:
     """Configuration for one backup folder source and target."""
@@ -133,10 +140,11 @@ class BackupFolder:
     source_address: str | None
     source_path: pathlib.Path
     target_path: pathlib.Path
+    exclude: tuple[str, ...] = ()
 
     @classmethod
     def from_toml(
-        cls, source_location: str, target_folder: str | None = None
+        cls, source_location: str, folder_info: FolderInfo | str | None = None
     ) -> BackupFolder:
         """Generate folder from data in the TOML file."""
         if ":" in source_location:
@@ -144,11 +152,22 @@ class BackupFolder:
         else:
             source_address, source_folder = None, source_location
         source_path = pathlib.Path(source_folder)
-        if target_folder is None:
+
+        exclude: tuple[str, ...] = ()
+        if folder_info is None:
             target_path = source_path.relative_to("/")
-        else:
-            target_path = pathlib.Path(target_folder)
-        return cls(source_address, source_path, target_path)
+        elif isinstance(folder_info, str):  # folder_info is just target_path
+            target_path = pathlib.Path(folder_info)
+        else:  # folder_info is FolderInfo
+            if "target" in folder_info:
+                target_path = pathlib.Path(folder_info.pop("target"))
+            else:
+                target_path = source_path.relative_to("/")
+            if "exclude" in folder_info:
+                exclude = tuple(folder_info.pop("exclude"))
+            for key in folder_info:
+                Logger.WARNING.print(f"Unknown field for '{source_location}': '{key}'")
+        return cls(source_address, source_path, target_path, exclude)
 
     def get_source_location(self) -> str:
         """Get source location formatted for the rsync command."""
@@ -178,7 +197,9 @@ class Config:
 
         try:
             target_location: str = toml_dict.pop("target-location")
-            backup_folders: list[str] | dict[str, str] = toml_dict.pop("backup-folders")
+            backup_folders: list[str] | dict[str, FolderInfo | str] = toml_dict.pop(
+                "backup-folders"
+            )
             exclude: list[str] = toml_dict.pop("exclude", [])
         except KeyError as ex:
             raise BlueError(f"Missing in '{filename}': {ex}") from None
@@ -192,8 +213,8 @@ class Config:
             )
         elif isinstance(backup_folders, dict):
             backup_folders_conf = tuple(
-                BackupFolder.from_toml(source_location, target_folder)
-                for source_location, target_folder in backup_folders.items()
+                BackupFolder.from_toml(source_location, folder_info)
+                for source_location, folder_info in backup_folders.items()
             )
         else:
             raise BlueError("'backup-folders' must be an array or a table.")
@@ -364,7 +385,6 @@ class BlueBackup:
             rsync_command.append(f"--remote-option=--log-file={self.log_file}")
         if self.checksum:
             rsync_command.append("--checksum")
-        rsync_command.extend(f"--exclude={folder}" for folder in self.config.exclude)
 
         if new_day:
             # Start a new day with removing files that do not exist anymore:
@@ -378,8 +398,14 @@ class BlueBackup:
             )[:-1]
             backup_target_str = self.proc.get_full_path(backup_target_str)
             self._run(
-                *rsync_command, source_folder_str, backup_target_str,
-                filter_output=self. _filter_rsync_output,
+                *rsync_command,
+                *(
+                    f"--exclude={folder}"
+                    for folder in self.config.exclude + backup_folder.exclude
+                ),
+                source_folder_str,
+                backup_target_str,
+                filter_output=self._filter_rsync_output,
                 force_local=True,
             )
 
