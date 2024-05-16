@@ -46,6 +46,9 @@ class Logger(enum.Enum):
             stream.write(f"{self.value}{text}{Logger._RESET.value}\n")
         else:
             stream.write(f"{text}\n")
+            # Flushing is needed when invoked using: ssh hostname ./blue-backup
+            # To get a colored output, force pseudo-terminal allocation using: ssh -t
+            stream.flush()
 
 
 class Process:
