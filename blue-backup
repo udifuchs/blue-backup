@@ -126,7 +126,7 @@ class Process:
         except OSError as ex:
             raise BlueError(
                 f"Failed opening '{self.get_full_path(filepath)}': {ex}"
-            ) from None
+            ) from ex
 
 
 class FolderInfo(TypedDict, total=False):
@@ -196,7 +196,7 @@ class Config:
             with pathlib.Path(filename).open(mode="rb") as toml_file:
                 toml_dict = tomllib.load(toml_file)
         except (OSError, tomllib.TOMLDecodeError) as ex:
-            raise BlueError(f"Failed to read '{filename}': {ex}") from None
+            raise BlueError(f"Failed to read '{filename}': {ex}") from ex
 
         try:
             target_location: str = toml_dict.pop("target-location")
@@ -205,7 +205,7 @@ class Config:
             )
             exclude: list[str] = toml_dict.pop("exclude", [])
         except KeyError as ex:
-            raise BlueError(f"Missing in '{filename}': {ex}") from None
+            raise BlueError(f"Missing in '{filename}': {ex}") from ex
         for key in toml_dict:
             Logger.WARNING.print(f"Unknown field in '{filename}': '{key}'")
 
@@ -222,7 +222,17 @@ class Config:
         else:
             raise BlueError("'backup-folders' must be an array or a table.")
 
-        return cls(target_location, backup_folders_conf, tuple(exclude))
+        config = cls(target_location, backup_folders_conf, tuple(exclude))
+        toml_folder_path = pathlib.Path(filename).resolve().parent
+        config.apply_var(TOML_FOLDER=str(toml_folder_path))
+        return config
+
+    def apply_var(self, **kwargs: str) -> None:
+        """Apply variable replacement to all paths in configuration."""
+        self.target_location = self.target_location.format(**kwargs)
+        for bf in self.backup_folders:
+            bf.source_path = pathlib.Path(str(bf.source_path).format(**kwargs))
+            bf.target_path = pathlib.Path(str(bf.target_path).format(**kwargs))
 
     def get_address_and_path(self) -> tuple[str | None, pathlib.Path]:
         """Break target location to address and path."""
@@ -249,6 +259,11 @@ class BlueBackup:
 
         if not target_path.is_absolute():
             raise BlueError(f"Target location '{target_path}' must be absoluse path.")
+        for bf in self.config.backup_folders:
+            if not bf.source_path.is_absolute():
+                raise BlueError(
+                    f"Source location '{bf.source_path}' must be absoluse path."
+                )
 
         self.proc = Process(target_address)
         self.folder_list: list[pathlib.Path] = []
@@ -271,7 +286,7 @@ class BlueBackup:
         except OSError as ex:
             raise BlueError(
                 f"Failed reading target location '{self.config.target_location}': {ex}"
-            ) from None
+            ) from ex
 
         today = datetime.date.today()
         self.today_folder = target_path / str(today)
@@ -307,9 +322,7 @@ class BlueBackup:
             self._print_command(" ".join(str_args))
         else:
             str_args = tuple(str(arg) for arg in args)
-            self._print_command(
-                f"""SSH {self.proc.address} -c '{" ".join(str_args)}'"""
-            )
+            self._print_command(f"""ssh {self.proc.address} {" ".join(str_args)}""")
         if self.dry_run:
             return 0
 
