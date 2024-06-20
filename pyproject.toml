@@ -29,7 +29,7 @@ ignore = [
     "TRY301",  # Abstract `raise` to an inner function
 ]
 
-pydocstyle.convention = "pep257"
+pydocstyle.convention = "google"
 
 [tool.pylint.message_control]
 disable = [

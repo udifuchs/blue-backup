@@ -258,11 +258,11 @@ class BlueBackup:
         target_address, target_path = self.config.get_address_and_path()
 
         if not target_path.is_absolute():
-            raise BlueError(f"Target location '{target_path}' must be absoluse path.")
+            raise BlueError(f"Target location '{target_path}' must be absolute path.")
         for bf in self.config.backup_folders:
             if not bf.source_path.is_absolute():
                 raise BlueError(
-                    f"Source location '{bf.source_path}' must be absoluse path."
+                    f"Source location '{bf.source_path}' must be absolute path."
                 )
 
         self.proc = Process(target_address)
@@ -292,6 +292,18 @@ class BlueBackup:
         self.today_folder = target_path / str(today)
         self.log_file = self.today_folder.with_suffix(".log")
 
+        _stat, out = self._run(
+            "/usr/bin/stat", "--file-system", "--format=%T", target_path,
+            filter_output=self.return_output
+        )
+        if out is not None:
+            out = out.strip()  # Remove any newlines.
+        self.target_is_btrfs = out == "btrfs"
+        self._print_output(
+            f"Target file system '{out}' {'==' if self.target_is_btrfs else '!='} "
+            "'btrfs'"
+        )
+
     def _print_output(self, text: str, *, to_log_file: bool = True) -> None:
         Logger.OUTPUT.print(text)
         if to_log_file and not self.dry_run:
@@ -313,9 +325,9 @@ class BlueBackup:
     def _run(
         self,
         *args: str | pathlib.Path,
-        filter_output: Callable[[bytes], None] | None = None,
+        filter_output: Callable[[bytes], str | None] | None = None,
         force_local: bool = False,
-    ) -> int:
+    ) -> tuple[int, str | None]:
         """Run an external command in a subprocess."""
         if force_local or self.proc.ssh is None:
             str_args = ("/usr/bin/sudo", *(str(arg) for arg in args))
@@ -324,20 +336,25 @@ class BlueBackup:
             str_args = tuple(str(arg) for arg in args)
             self._print_command(f"""ssh {self.proc.address} {" ".join(str_args)}""")
         if self.dry_run:
-            return 0
+            return 0, None
 
         proc = self.proc.run(str_args, force_local=force_local)
+        str_out: str | None = None
         if filter_output is None:
             if len(proc.stdout) > 0:
                 self._print_output(proc.stdout.decode("utf8"))
         else:
-            filter_output(proc.stdout)
+            str_out = filter_output(proc.stdout)
         if len(proc.stderr) > 0:
             self._print_error(proc.stderr.decode("utf8"))
         if proc.returncode != 0:
             self._print_error(f"Return code: {proc.returncode}")
 
-        return proc.returncode
+        return proc.returncode, str_out
+
+    def return_output(self, output: bytes) -> str:
+        """Callback to return stdout to caller."""
+        return output.decode("utf8")
 
     def _filter_rsync_output(self, output: bytes) -> None:
         """Filter the output of 'rsync --info=stats2'."""
@@ -366,6 +383,22 @@ class BlueBackup:
             )):
                 self._print_output(line, to_log_file=False)
 
+    def create_new_backup_folder(self) -> None:
+        """Prepare a new folder for today's backup."""
+        last_folder = max(self.folder_list)
+        if self.target_is_btrfs:
+            # When using btrfs snapshots, first set last snapshot to readonly:
+            self._run(
+                "/usr/bin/btrfs", "property", "set", "-ts", last_folder, "ro", "true"
+            )
+            self._run(
+                "/usr/bin/btrfs", "subvolume", "snapshot",
+                last_folder, self.today_folder
+            )
+        else:
+            self._run("/usr/bin/cp", "-al", last_folder, self.today_folder)
+        self.folder_list.append(self.today_folder)
+
     def backup(self) -> None:
         """Perform the actual backup."""
         new_day = self.today_folder not in self.folder_list
@@ -376,7 +409,12 @@ class BlueBackup:
                     "This is not the first time you are backing up to this folder, "
                     "remove --first-time"
                 )
-            self._run("/usr/bin/mkdir", self.today_folder)
+            if self.target_is_btrfs:
+                self._run(
+                    "/usr/bin/btrfs", "subvolume", "create", self.today_folder
+                )
+            else:
+                self._run("/usr/bin/mkdir", self.today_folder)
 
         elif new_day:
             # New day - new backup folder:
@@ -385,9 +423,7 @@ class BlueBackup:
                     "This is the first time you are backing up to this folder, "
                     "specify --first-time"
                 )
-            last_folder = max(self.folder_list)
-            self._run("/usr/bin/cp", "-al", last_folder, self.today_folder)
-            self.folder_list.append(self.today_folder)
+            self.create_new_backup_folder()
 
         rsync_command = [
             "/usr/bin/rsync", "--archive", "--human-readable", "--info=stats2",
@@ -442,7 +478,10 @@ class BlueBackup:
         self._print_output(f"Kept monthly backups: {monthly_backups}")
 
         while len(folder_list) > keep:
-            self._run("/usr/bin/rm", "-r", folder_list[0])
+            if self.target_is_btrfs:
+                self._run("/usr/bin/btrfs", "subvolume", "delete", folder_list[0])
+            else:
+                self._run("/usr/bin/rm", "-r", folder_list[0])
             # self._run("/usr/bin/rm", folder_list[0].with_suffix(".log"))
             folder_list.pop(0)
         self._print_output(f"Kept daily backups: {len(folder_list)}")
