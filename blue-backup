@@ -185,7 +185,8 @@ class BackupFolder:
 class Config:
     """Configuration from the TOML file."""
 
-    target_location: str
+    target_address: str | None
+    target_path: pathlib.Path
     backup_folders: tuple[BackupFolder, ...]
     exclude: tuple[str, ...] = ()
 
@@ -209,6 +210,12 @@ class Config:
         for key in toml_dict:
             Logger.WARNING.print(f"Unknown field in '{filename}': '{key}'")
 
+        # Break target location to address and path.
+        target_address: str | None = None
+        if ":" in target_location:
+            target_address, target_location = target_location.split(":", 2)
+        target_path = pathlib.Path(target_location)
+
         if isinstance(backup_folders, list):
             backup_folders_conf = tuple(
                 BackupFolder.from_toml(source_location)
@@ -222,26 +229,35 @@ class Config:
         else:
             raise BlueError("'backup-folders' must be an array or a table.")
 
-        config = cls(target_location, backup_folders_conf, tuple(exclude))
+        config = cls(target_address, target_path, backup_folders_conf, tuple(exclude))
         toml_folder_path = pathlib.Path(filename).resolve().parent
         config.apply_var(TOML_FOLDER=str(toml_folder_path))
         return config
 
     def apply_var(self, **kwargs: str) -> None:
         """Apply variable replacement to all paths in configuration."""
-        self.target_location = self.target_location.format(**kwargs)
+        self.target_path = pathlib.Path(str(self.target_path).format(**kwargs))
         for bf in self.backup_folders:
             bf.source_path = pathlib.Path(str(bf.source_path).format(**kwargs))
             bf.target_path = pathlib.Path(str(bf.target_path).format(**kwargs))
 
-    def get_address_and_path(self) -> tuple[str | None, pathlib.Path]:
-        """Break target location to address and path."""
-        target_address: str | None = None
-        target_location = self.target_location
-        if ":" in self.target_location:
-            target_address, target_location = self.target_location.split(":", 2)
-        target_path = pathlib.Path(target_location)
-        return target_address, target_path
+    def check_all_paths_absolute(self) -> None:
+        """Make sure that all paths in configuration are absolute."""
+        if not self.target_path.is_absolute():
+            raise BlueError(
+                f"Target location '{self.target_path}' must be absolute path."
+            )
+        for bf in self.backup_folders:
+            if not bf.source_path.is_absolute():
+                raise BlueError(
+                    f"Source location '{bf.source_path}' must be absolute path."
+                )
+
+    def get_target_location(self) -> str:
+        """Get target location."""
+        if self.target_address is None:
+            return str(self.target_path)
+        return f"{self.target_address}:{self.target_path}"
 
 
 @dataclasses.dataclass
@@ -255,23 +271,14 @@ class BlueBackup:
 
     def __post_init__(self) -> None:
         """Prepare for backup."""
-        target_address, target_path = self.config.get_address_and_path()
-
-        if not target_path.is_absolute():
-            raise BlueError(f"Target location '{target_path}' must be absolute path.")
-        for bf in self.config.backup_folders:
-            if not bf.source_path.is_absolute():
-                raise BlueError(
-                    f"Source location '{bf.source_path}' must be absolute path."
-                )
-
-        self.proc = Process(target_address)
+        self.config.check_all_paths_absolute()
+        self.proc = Process(self.config.target_address)
         self.folder_list: list[pathlib.Path] = []
 
         try:
-            for path_attr in self.proc.iterdir_attr(target_path):
+            for path_attr in self.proc.iterdir_attr(self.config.target_path):
                 if path_attr.st_mode is not None and stat.S_ISDIR(path_attr.st_mode):
-                    folder_path = target_path / path_attr.filename
+                    folder_path = self.config.target_path / path_attr.filename
                     try:
                         date = datetime.date.fromisoformat(folder_path.name)
                         iso_date = date.isoformat()
@@ -285,15 +292,16 @@ class BlueBackup:
                         self.folder_list.append(folder_path)
         except OSError as ex:
             raise BlueError(
-                f"Failed reading target location '{self.config.target_location}': {ex}"
+                f"Failed reading target location "
+                f"'{self.config.get_target_location()}': {ex}"
             ) from ex
 
         today = datetime.date.today()
-        self.today_folder = target_path / str(today)
+        self.today_folder = self.config.target_path / str(today)
         self.log_file = self.today_folder.with_suffix(".log")
 
         _stat, out = self._run(
-            "/usr/bin/stat", "--file-system", "--format=%T", target_path,
+            "/usr/bin/stat", "--file-system", "--format=%T", self.config.target_path,
             filter_output=self.return_output
         )
         if out is not None:
