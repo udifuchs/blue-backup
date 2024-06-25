@@ -299,17 +299,22 @@ class BlueBackup:
         today = datetime.date.today()
         self.today_folder = self.config.target_path / str(today)
         self.log_file = self.today_folder.with_suffix(".log")
+        # While setting up the snapshot, exit on any error:
+        self._exit_on_run_error = True
+        self.target_is_btrfs: bool
 
-        _stat, out = self._run(
+        def check_stat_output(output: bytes) -> None:
+            """Callback for checking target file system type."""
+            str_out = output.decode("utf8").strip()  # Remove any newlines.
+            self.target_is_btrfs = str_out == "btrfs"
+            self._print_output(
+                f"Target file system is '{str_out}'. Create snapshots using "
+                f"{'btrfs subvolumes' if self.target_is_btrfs else 'hard-links'}."
+            )
+
+        self._run(
             "/usr/bin/stat", "--file-system", "--format=%T", self.config.target_path,
-            filter_output=self.return_output
-        )
-        if out is not None:
-            out = out.strip()  # Remove any newlines.
-        self.target_is_btrfs = out == "btrfs"
-        self._print_output(
-            f"Target file system '{out}' {'==' if self.target_is_btrfs else '!='} "
-            "'btrfs'"
+            filter_output=check_stat_output,
         )
 
     def _print_output(self, text: str, *, to_log_file: bool = True) -> None:
@@ -333,9 +338,9 @@ class BlueBackup:
     def _run(
         self,
         *args: str | pathlib.Path,
-        filter_output: Callable[[bytes], str | None] | None = None,
+        filter_output: Callable[[bytes], None] | None = None,
         force_local: bool = False,
-    ) -> tuple[int, str | None]:
+    ) -> int:
         """Run an external command in a subprocess."""
         if force_local or self.proc.ssh is None:
             str_args = ("/usr/bin/sudo", *(str(arg) for arg in args))
@@ -344,25 +349,23 @@ class BlueBackup:
             str_args = tuple(str(arg) for arg in args)
             self._print_command(f"""ssh {self.proc.address} {" ".join(str_args)}""")
         if self.dry_run:
-            return 0, None
+            return 0
 
         proc = self.proc.run(str_args, force_local=force_local)
-        str_out: str | None = None
         if filter_output is None:
             if len(proc.stdout) > 0:
                 self._print_output(proc.stdout.decode("utf8"))
         else:
-            str_out = filter_output(proc.stdout)
+            filter_output(proc.stdout)
         if len(proc.stderr) > 0:
             self._print_error(proc.stderr.decode("utf8"))
         if proc.returncode != 0:
-            self._print_error(f"Return code: {proc.returncode}")
+            error_message = f"Return code: {proc.returncode}"
+            if self._exit_on_run_error:
+                raise BlueError(error_message)
+            self._print_error(error_message)
 
-        return proc.returncode, str_out
-
-    def return_output(self, output: bytes) -> str:
-        """Callback to return stdout to caller."""
-        return output.decode("utf8")
+        return proc.returncode
 
     def _filter_rsync_output(self, output: bytes) -> None:
         """Filter the output of 'rsync --info=stats2'."""
@@ -404,6 +407,7 @@ class BlueBackup:
                 last_folder, self.today_folder
             )
         else:
+            # Create snapshot using hard links.
             self._run("/usr/bin/cp", "-al", last_folder, self.today_folder)
         self.folder_list.append(self.today_folder)
 
@@ -432,6 +436,9 @@ class BlueBackup:
                     "specify --first-time"
                 )
             self.create_new_backup_folder()
+
+        # From this point, do not exit on errors:
+        self._exit_on_run_error = False
 
         rsync_command = [
             "/usr/bin/rsync", "--archive", "--human-readable", "--info=stats2",
