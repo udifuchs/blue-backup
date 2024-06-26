@@ -509,17 +509,17 @@ class BlueBackup:
     def from_command_line_arguments(cls) -> BlueBackup:
         """Initialize a Backup class instance from command line arguments."""
         parser = argparse.ArgumentParser()
-        parser.add_argument("--config", default="blue-backup.toml")
+        parser.add_argument("toml_config", nargs="?", default="blue-backup.toml")
         parser.add_argument("--first-time", action="store_true")
         parser.add_argument("--dry-run", action="store_true")
         parser.add_argument("--checksum", action="store_true")
         args = parser.parse_args()
 
-        config = Config.from_toml(args.config)
+        config = Config.from_toml(args.toml_config)
         backup_args = vars(args)
-        backup_args["config"] = config
+        del backup_args["toml_config"]
 
-        return cls(**backup_args)
+        return cls(config=config, **backup_args)
 
 
 def main() -> None:
