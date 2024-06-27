@@ -4,6 +4,7 @@ dependencies = [
     "tomli; python_version<'3.11'",
     "paramiko",
 ]
+requires-python = ">=3.8"
 
 [tool.mypy]
 files = ["blue-backup"]
@@ -16,8 +17,6 @@ include = ["blue-backup"]
 select = ["ALL"]
 
 ignore = [
-    "ANN101",  # Missing type annotation for `self` in method
-    "ANN102",  # Missing type annotation for `cls` in classmethod
     "COM812",  # Trailing comma missing
     "DTZ011",  # `datetime.date.today()` used
     "EM101",  # Exception must not use a string literal, assign to variable first
