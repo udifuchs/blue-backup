@@ -442,6 +442,8 @@ class BlueBackup:
 
         rsync_command = [
             "/usr/bin/rsync", "--archive", "--human-readable", "--info=stats2",
+            # Remove files that do not exist anymore:
+            "--delete", "--delete-excluded",
             # Create all missing path components of the destination path:
             "--mkpath",
         ]
@@ -452,10 +454,6 @@ class BlueBackup:
             rsync_command.append(f"--remote-option=--log-file={self.log_file}")
         if self.checksum:
             rsync_command.append("--checksum")
-
-        if new_day:
-            # Start a new day with removing files that do not exist anymore:
-            rsync_command.extend(["--delete", "--delete-excluded"])
 
         for backup_folder in self.config.backup_folders:
             # str(path / "_")[:-1] is to ensure that path ends with a "/".
