@@ -268,6 +268,7 @@ class BlueBackup:
     first_time: bool = False
     dry_run: bool = False
     checksum: bool = False
+    print_summary: bool = False
 
     def __post_init__(self) -> None:
         """Prepare for backup."""
@@ -299,6 +300,7 @@ class BlueBackup:
         today = datetime.date.today()
         self.today_folder = self.config.target_path / str(today)
         self.log_file = self.today_folder.with_suffix(".log")
+        self._print_output(f"Backup: {self.config.get_target_location()} {today}")
         # While setting up the snapshot, exit on any error:
         self._exit_on_run_error = True
         self.target_is_btrfs: bool
@@ -307,10 +309,6 @@ class BlueBackup:
             """Callback for checking target file system type."""
             str_out = output.decode("utf8").strip()  # Remove any newlines.
             self.target_is_btrfs = str_out == "btrfs"
-            self._print_output(
-                f"Target file system is '{str_out}'. Create snapshots using "
-                f"{'btrfs subvolumes' if self.target_is_btrfs else 'hard-links'}."
-            )
 
         self._run(
             "/usr/bin/stat", "--file-system", "--format=%T", self.config.target_path,
@@ -324,7 +322,9 @@ class BlueBackup:
                 log_file.write(f"{text}\n".encode())
 
     def _print_command(self, text: str) -> None:
-        Logger.COMMAND.print(text)
+        if not self.print_summary:
+            # Do not print commands in summary mode.
+            Logger.COMMAND.print(text)
         if not self.dry_run:
             with self.proc.open(self.log_file, mode="ab") as log_file:
                 log_file.write(f"\n{text}\n".encode())
@@ -387,12 +387,14 @@ class BlueBackup:
         #
         # sent 4.46G bytes  received 51.68K bytes  33.93M bytes/sec
         # total size is 177.91G  speedup is 39.87
-        for line in output.decode("utf8").split("\n"):
+        out_lines = [
+            line for line in output.decode("utf8").split("\n")
             if line.startswith((
                 "Total file size:",
                 "Total transferred file size:",
-            )):
-                self._print_output(line, to_log_file=False)
+            ))
+        ]
+        self._print_output(" / ".join(out_lines), to_log_file=False)
 
     def create_new_backup_folder(self) -> None:
         """Prepare a new folder for today's backup."""
@@ -422,9 +424,7 @@ class BlueBackup:
                     "remove --first-time"
                 )
             if self.target_is_btrfs:
-                self._run(
-                    "/usr/bin/btrfs", "subvolume", "create", self.today_folder
-                )
+                self._run("/usr/bin/btrfs", "subvolume", "create", self.today_folder)
             else:
                 self._run("/usr/bin/mkdir", self.today_folder)
 
@@ -456,6 +456,11 @@ class BlueBackup:
             rsync_command.append("--checksum")
 
         for backup_folder in self.config.backup_folders:
+            if self.print_summary:
+                # Full rsync command is not printed. Print short summary instead:
+                self._print_output(
+                    f"rsync {backup_folder.get_source_location()}", to_log_file=False
+                )
             # str(path / "_")[:-1] is to ensure that path ends with a "/".
             source_folder_str = backup_folder.get_source_location()
             backup_target_str = str(
@@ -511,6 +516,7 @@ class BlueBackup:
         parser.add_argument("--first-time", action="store_true")
         parser.add_argument("--dry-run", action="store_true")
         parser.add_argument("--checksum", action="store_true")
+        parser.add_argument("--print-summary", action="store_true")
         args = parser.parse_args()
 
         config = Config.from_toml(args.toml_config)
