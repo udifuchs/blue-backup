@@ -342,11 +342,10 @@ class BlueBackup:
         force_local: bool = False,
     ) -> int:
         """Run an external command in a subprocess."""
+        str_args = tuple(str(arg) for arg in args)
         if force_local or self.proc.ssh is None:
-            str_args = ("/usr/bin/sudo", *(str(arg) for arg in args))
             self._print_command(" ".join(str_args))
         else:
-            str_args = tuple(str(arg) for arg in args)
             self._print_command(f"""ssh {self.proc.address} {" ".join(str_args)}""")
         if self.dry_run:
             return 0
