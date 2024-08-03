@@ -146,9 +146,7 @@ class BackupFolder:
     exclude: tuple[str, ...] = ()
 
     @classmethod
-    def from_toml(
-        cls, source_location: str, folder_info: FolderInfo | str | None = None
-    ) -> BackupFolder:
+    def from_toml(cls, source_location: str, folder_info: FolderInfo) -> BackupFolder:
         """Generate folder from data in the TOML file."""
         if ":" in source_location:
             source_address, source_folder = source_location.split(":", 2)
@@ -156,20 +154,15 @@ class BackupFolder:
             source_address, source_folder = None, source_location
         source_path = pathlib.Path(source_folder)
 
-        exclude: tuple[str, ...] = ()
-        if folder_info is None:
+        if not isinstance(folder_info, dict):
+            raise BlueError(f"Folder info for '{source_location}' must be a table.")
+        if "target" in folder_info:
+            target_path = pathlib.Path(folder_info.pop("target"))
+        else:
             target_path = source_path.relative_to("/")
-        elif isinstance(folder_info, str):  # folder_info is just target_path
-            target_path = pathlib.Path(folder_info)
-        else:  # folder_info is FolderInfo
-            if "target" in folder_info:
-                target_path = pathlib.Path(folder_info.pop("target"))
-            else:
-                target_path = source_path.relative_to("/")
-            if "exclude" in folder_info:
-                exclude = tuple(folder_info.pop("exclude"))
-            for key in folder_info:
-                Logger.WARNING.print(f"Unknown field for '{source_location}': '{key}'")
+        exclude = tuple(folder_info.pop("exclude")) if "exclude" in folder_info else ()
+        for key in folder_info:
+            Logger.WARNING.print(f"Unknown field for '{source_location}': '{key}'")
         return cls(source_address, source_path, target_path, exclude)
 
     def get_source_location(self) -> str:
@@ -201,9 +194,7 @@ class Config:
 
         try:
             target_location: str = toml_dict.pop("target-location")
-            backup_folders: list[str] | dict[str, FolderInfo | str] = toml_dict.pop(
-                "backup-folders"
-            )
+            backup_folders: dict[str, FolderInfo] = toml_dict.pop("backup-folders")
             exclude: list[str] = toml_dict.pop("exclude", [])
         except KeyError as ex:
             raise BlueError(f"Missing in '{filename}': {ex}") from ex
@@ -216,18 +207,13 @@ class Config:
             target_address, target_location = target_location.split(":", 2)
         target_path = pathlib.Path(target_location)
 
-        if isinstance(backup_folders, list):
-            backup_folders_conf = tuple(
-                BackupFolder.from_toml(source_location)
-                for source_location in backup_folders
-            )
-        elif isinstance(backup_folders, dict):
+        if isinstance(backup_folders, dict):
             backup_folders_conf = tuple(
                 BackupFolder.from_toml(source_location, folder_info)
                 for source_location, folder_info in backup_folders.items()
             )
         else:
-            raise BlueError("'backup-folders' must be an array or a table.")
+            raise BlueError("'backup-folders' must be a table.")
 
         config = cls(target_address, target_path, backup_folders_conf, tuple(exclude))
         toml_folder_path = pathlib.Path(filename).resolve().parent
