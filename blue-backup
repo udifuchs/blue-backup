@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import atexit
+import contextlib
 import dataclasses
 import datetime
 import enum
@@ -15,6 +17,11 @@ import subprocess
 import sys
 from collections.abc import Callable, Iterator
 from typing import BinaryIO, Literal, Sequence, TypeAlias, TypedDict, cast
+
+if sys.version_info >= (3, 11):
+    from typing import Self
+else:  # Avoid depending on typing-extensions
+    from typing import Any as Self
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -49,6 +56,83 @@ class Logger(enum.Enum):
             # Flushing is needed when invoked using: ssh hostname ./blue-backup
             # To get a colored output, force pseudo-terminal allocation using: ssh -t
             stream.flush()
+
+
+class AlreadyRunningError(Exception):
+    """A different process is currently holding this PID file."""
+
+
+class PIDFile:
+    """Context manager for PID files."""
+    # Based on: https://github.com/mosquito/python-pidfile
+
+    def __init__(self, filename: str) -> None:
+        """Initialize a PID file with its filename."""
+        self._filepath = pathlib.Path(filename)
+
+    @staticmethod
+    def _get_cmdline(pid: int) -> list[str]:
+        # Based on psutil/_pslinux.py
+        cmdline_path = pathlib.Path(f"/proc/{pid}/cmdline")
+        with cmdline_path.open("r", encoding="utf-8") as cmdline_file:
+            cmdline = cmdline_file.read()
+            if not cmdline:  # may happen in case of zombie process
+                return []
+            if cmdline.endswith("\x00"):
+                cmdline = cmdline[:-1]
+        return cmdline.split("\x00")
+
+    @property
+    def is_running(self) -> bool:
+        """Check if PID file exists and if there is a process using it."""
+        if not self._filepath.exists():
+            return False
+
+        with self._filepath.open(mode="r", encoding="utf-8") as pid_file:
+            try:
+                pid = int(pid_file.read())
+            except (OSError, ValueError):
+                return False
+
+        # Check if pid currently exists:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            pass
+
+        try:
+            pid_cmdline = self._get_cmdline(pid)
+            my_cmdline = self._get_cmdline(os.getpid())
+        except PermissionError:
+            return False
+        # cmdline[0] should be "python3".
+        # cmdline[1] should be the path to this python code.
+        return pid_cmdline[0] == my_cmdline[0] and pid_cmdline[1] == my_cmdline[1]
+
+    def close(self) -> None:
+        """Remove PID file."""
+        if self._filepath.exists():
+            with contextlib.suppress(OSError):
+                self._filepath.unlink()
+
+    def __enter__(self) -> Self:
+        """Try to create the PID file to enter the context manager."""
+        if self.is_running:
+            raise AlreadyRunningError
+
+        with self._filepath.open("w", encoding="utf-8") as pid_file:
+            pid_file.write(str(os.getpid()))
+
+        atexit.register(self.close)
+
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        """Remove the PID file on exiting the context manager."""
+        self.close()
+        atexit.unregister(self.close)
 
 
 class Process:
@@ -146,7 +230,7 @@ class BackupFolder:
     exclude: tuple[str, ...] = ()
 
     @classmethod
-    def from_toml(cls, source_location: str, folder_info: FolderInfo) -> BackupFolder:
+    def from_toml(cls, source_location: str, folder_info: FolderInfo) -> Self:
         """Generate folder from data in the TOML file."""
         if ":" in source_location:
             source_address, source_folder = source_location.split(":", 2)
@@ -184,7 +268,7 @@ class Config:
     exclude: tuple[str, ...] = ()
 
     @classmethod
-    def from_toml(cls, filename: str) -> Config:
+    def from_toml(cls, filename: str) -> Self:
         """Create a Config class from a TOML file."""
         try:
             with pathlib.Path(filename).open(mode="rb") as toml_file:
@@ -251,6 +335,7 @@ class BlueBackup:
     """Backup using rsync."""
 
     config: Config
+    toml_config: str
     first_time: bool = False
     dry_run: bool = False
     checksum: bool = False
@@ -494,7 +579,7 @@ class BlueBackup:
         self._run("/usr/bin/df", "--human-readable", self.today_folder)
 
     @classmethod
-    def from_command_line_arguments(cls) -> BlueBackup:
+    def from_command_line_arguments(cls) -> Self:
         """Initialize a Backup class instance from command line arguments."""
         parser = argparse.ArgumentParser()
         parser.add_argument("toml_config", nargs="?", default="blue-backup.toml")
@@ -506,7 +591,6 @@ class BlueBackup:
 
         config = Config.from_toml(args.toml_config)
         backup_args = vars(args)
-        del backup_args["toml_config"]
 
         return cls(config=config, **backup_args)
 
@@ -515,9 +599,13 @@ def main() -> None:
     """Backup main entry-point."""
     try:
         backup = BlueBackup.from_command_line_arguments()
-        backup.backup()
-        backup.purge(keep=20)
-        backup.disk_space()
+        with PIDFile(backup.toml_config + ".pid"):
+            backup.backup()
+            backup.purge(keep=20)
+            backup.disk_space()
+    except AlreadyRunningError:
+        Logger.ERROR.print(f"Backup for {backup.toml_config} already running.")
+        raise SystemExit(1) from None
     except BlueError as ex:
         Logger.ERROR.print(str(ex))
         raise SystemExit(1) from ex

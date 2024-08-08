@@ -17,6 +17,7 @@ include = ["blue-backup"]
 select = ["ALL"]
 
 ignore = [
+    "ANN401",  # Dynamically typed expressions (typing.Any) are disallowed
     "COM812",  # Trailing comma missing
     "DTZ011",  # `datetime.date.today()` used
     "EM101",  # Exception must not use a string literal, assign to variable first
