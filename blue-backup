@@ -16,12 +16,15 @@ import stat
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
-from typing import BinaryIO, Literal, Sequence, TypeAlias, TypedDict, cast
+from typing import BinaryIO, Literal, Sequence, TypedDict, cast
 
 if sys.version_info >= (3, 11):
     from typing import Self
 else:  # Avoid depending on typing-extensions
     from typing import Any as Self
+
+if sys.version_info >= (3, 10):
+    from typing import TypeAlias
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -30,7 +33,10 @@ else:
 
 import paramiko
 
-OpenBinaryMode: TypeAlias = Literal["rb", "wb", "ab"]
+if sys.version_info >= (3, 10):
+    OpenBinaryMode: TypeAlias = Literal["rb", "wb", "ab"]
+else:
+    OpenBinaryMode = Literal["rb", "wb", "ab"]
 
 
 class BlueError(Exception):
