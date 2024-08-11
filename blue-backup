@@ -43,6 +43,13 @@ class BlueError(Exception):
     """blue-backup failed."""
 
 
+class ProcessError(BlueError):
+    """Error while executing external process."""
+
+    def __init__(self, error_message: str, return_code: int) -> None:
+        super().__init__(f"{error_message}Return code: {return_code}")
+
+
 class Logger(enum.Enum):
     """Log messages."""
 
@@ -73,7 +80,6 @@ class PIDFile:
     # Based on: https://github.com/mosquito/python-pidfile
 
     def __init__(self, filename: str) -> None:
-        """Initialize a PID file with its filename."""
         self._filepath = pathlib.Path(filename)
 
     @staticmethod
@@ -378,8 +384,6 @@ class BlueBackup:
         self.today_folder = self.config.target_path / str(today)
         self.log_file = self.today_folder.with_suffix(".log")
         self._print_output(f"Backup: {self.config.get_target_location()} {today}")
-        # While setting up the snapshot, exit on any error:
-        self._exit_on_run_error = True
         self.target_is_btrfs: bool
 
         def check_stat_output(output: bytes) -> None:
@@ -417,7 +421,7 @@ class BlueBackup:
         *args: str | pathlib.Path,
         filter_output: Callable[[bytes], None] | None = None,
         force_local: bool = False,
-    ) -> int:
+    ) -> None:
         """Run an external command in a subprocess."""
         str_args = tuple(str(arg) for arg in args)
         if force_local or self.proc.ssh is None:
@@ -425,23 +429,17 @@ class BlueBackup:
         else:
             self._print_command(f"""ssh {self.proc.address} {" ".join(str_args)}""")
         if self.dry_run:
-            return 0
+            return
 
         proc = self.proc.run(str_args, force_local=force_local)
         if filter_output is None:
             if len(proc.stdout) > 0:
-                self._print_output(proc.stdout.decode("utf8"))
+                # The [:-1] is to remove the last newline.
+                self._print_output(proc.stdout.decode("utf8")[:-1])
         else:
             filter_output(proc.stdout)
-        if len(proc.stderr) > 0:
-            self._print_error(proc.stderr.decode("utf8"))
-        if proc.returncode != 0:
-            error_message = f"Return code: {proc.returncode}"
-            if self._exit_on_run_error:
-                raise BlueError(error_message)
-            self._print_error(error_message)
-
-        return proc.returncode
+        if len(proc.stderr) > 0 or proc.returncode != 0:
+            raise ProcessError(proc.stderr.decode("utf8"), proc.returncode)
 
     def _filter_rsync_output(self, output: bytes) -> None:
         """Filter the output of 'rsync --info=stats2'."""
@@ -474,6 +472,11 @@ class BlueBackup:
 
     def create_new_backup_folder(self) -> None:
         """Prepare a new folder for today's backup."""
+        if len(self.folder_list) == 0:
+            raise BlueError(
+                "This is the first time you are backing up to this folder, "
+                "specify --first-time"
+            )
         last_folder = max(self.folder_list)
         if self.target_is_btrfs:
             # When using btrfs snapshots, first set last snapshot to readonly:
@@ -506,15 +509,7 @@ class BlueBackup:
 
         elif new_day:
             # New day - new backup folder:
-            if len(self.folder_list) == 0:
-                raise BlueError(
-                    "This is the first time you are backing up to this folder, "
-                    "specify --first-time"
-                )
             self.create_new_backup_folder()
-
-        # From this point, do not exit on errors:
-        self._exit_on_run_error = False
 
         rsync_command = [
             "/usr/bin/rsync", "--archive", "--human-readable", "--info=stats2",
@@ -543,17 +538,20 @@ class BlueBackup:
                 self.today_folder / backup_folder.target_path / "_"
             )[:-1]
             backup_target_str = self.proc.get_full_path(backup_target_str)
-            self._run(
-                *rsync_command,
-                *(
-                    f"--exclude={folder}"
-                    for folder in self.config.exclude + backup_folder.exclude
-                ),
-                source_folder_str,
-                backup_target_str,
-                filter_output=self._filter_rsync_output,
-                force_local=True,
-            )
+            try:
+                self._run(
+                    *rsync_command,
+                    *(
+                        f"--exclude={folder}"
+                        for folder in self.config.exclude + backup_folder.exclude
+                    ),
+                    source_folder_str,
+                    backup_target_str,
+                    filter_output=self._filter_rsync_output,
+                    force_local=True,
+                )
+            except ProcessError as ex:
+                self._print_error(str(ex))
 
         # Commit filesystem caches to disk:
         self._run("/usr/bin/sync", self.today_folder)
@@ -572,11 +570,14 @@ class BlueBackup:
         self._print_output(f"Kept monthly backups: {monthly_backups}")
 
         while len(folder_list) > keep:
-            if self.target_is_btrfs:
-                self._run("/usr/bin/btrfs", "subvolume", "delete", folder_list[0])
-            else:
-                self._run("/usr/bin/rm", "-r", folder_list[0])
-            # self._run("/usr/bin/rm", folder_list[0].with_suffix(".log"))
+            try:
+                if self.target_is_btrfs:
+                    self._run("/usr/bin/btrfs", "subvolume", "delete", folder_list[0])
+                else:
+                    self._run("/usr/bin/rm", "-r", folder_list[0])
+                # self._run("/usr/bin/rm", folder_list[0].with_suffix(".log"))
+            except ProcessError as ex:
+                self._print_error(str(ex))
             folder_list.pop(0)
         self._print_output(f"Kept daily backups: {len(folder_list)}")
 
