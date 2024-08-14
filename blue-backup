@@ -71,7 +71,7 @@ class Logger(enum.Enum):
             stream.flush()
 
 
-class AlreadyRunningError(Exception):
+class AlreadyRunningError(BlueError):
     """A different process is currently holding this PID file."""
 
 
@@ -132,7 +132,7 @@ class PIDFile:
     def __enter__(self) -> Self:
         """Try to create the PID file to enter the context manager."""
         if self.is_running:
-            raise AlreadyRunningError
+            raise AlreadyRunningError(f"Process for {self._filepath} already running.")
 
         with self._filepath.open("w", encoding="utf-8") as pid_file:
             pid_file.write(str(os.getpid()))
@@ -610,9 +610,6 @@ def main() -> None:
             backup.backup()
             backup.purge(keep=20)
             backup.disk_space()
-    except AlreadyRunningError:
-        Logger.ERROR.print(f"Backup for {backup.toml_config} already running.")
-        raise SystemExit(1) from None
     except BlueError as ex:
         Logger.ERROR.print(str(ex))
         raise SystemExit(1) from ex
