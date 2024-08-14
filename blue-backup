@@ -59,16 +59,17 @@ class Logger(enum.Enum):
     WARNING = "\033[33m"  # Yellow
     _RESET = "\033[0m"
 
-    def print(self, text: str) -> None:
+    def print(self, text: str, indent: str = "") -> None:
         """Print a log message."""
         stream = sys.stderr if self in {Logger.ERROR, Logger.WARNING} else sys.stdout
-        if stream.isatty():
-            stream.write(f"{self.value}{text}{Logger._RESET.value}\n")
-        else:
-            stream.write(f"{text}\n")
-            # Flushing is needed when invoked using: ssh hostname ./blue-backup
-            # To get a colored output, force pseudo-terminal allocation using: ssh -t
-            stream.flush()
+        for line in text.split("\n"):
+            if stream.isatty():
+                stream.write(f"{indent}{self.value}{line}{Logger._RESET.value}\n")
+            else:
+                stream.write(f"{indent}{line}\n")
+        # Flushing is needed when invoked using: ssh hostname ./blue-backup
+        # To get a colored output, force pseudo-terminal allocation using: ssh -t
+        stream.flush()
 
 
 class AlreadyRunningError(BlueError):
@@ -351,7 +352,7 @@ class BlueBackup:
     first_time: bool = False
     dry_run: bool = False
     checksum: bool = False
-    print_summary: bool = False
+    log_summary: bool = False
 
     def __post_init__(self) -> None:
         """Prepare for backup."""
@@ -383,7 +384,7 @@ class BlueBackup:
         today = datetime.date.today()
         self.today_folder = self.config.target_path / str(today)
         self.log_file = self.today_folder.with_suffix(".log")
-        self._print_output(f"Backup: {self.config.get_target_location()} {today}")
+        self._indent = ""
         self.target_is_btrfs: bool
 
         def check_stat_output(output: bytes) -> None:
@@ -393,25 +394,25 @@ class BlueBackup:
 
         self._run(
             "/usr/bin/stat", "--file-system", "--format=%T", self.config.target_path,
-            filter_output=check_stat_output,
+            filter_output=check_stat_output, log_command=False
         )
 
-    def _print_output(self, text: str, *, to_log_file: bool = True) -> None:
-        Logger.OUTPUT.print(text)
-        if to_log_file and not self.dry_run:
+    def _print_output(self, text: str, *, log_to_file: bool = True) -> None:
+        Logger.OUTPUT.print(text, self._indent)
+        if log_to_file and not self.dry_run:
             with self.proc.open(self.log_file, mode="ab") as log_file:
                 log_file.write(f"{text}\n".encode())
 
     def _print_command(self, text: str) -> None:
-        if not self.print_summary:
+        if not self.log_summary:
             # Do not print commands in summary mode.
-            Logger.COMMAND.print(text)
+            Logger.COMMAND.print(text, self._indent)
         if not self.dry_run:
             with self.proc.open(self.log_file, mode="ab") as log_file:
                 log_file.write(f"\n{text}\n".encode())
 
     def _print_error(self, text: str) -> None:
-        Logger.ERROR.print(text)
+        Logger.ERROR.print(text, self._indent)
         if not self.dry_run:
             with self.proc.open(self.log_file, mode="ab") as log_file:
                 log_file.write(f"{text}\n".encode())
@@ -420,14 +421,16 @@ class BlueBackup:
         self,
         *args: str | pathlib.Path,
         filter_output: Callable[[bytes], None] | None = None,
+        log_command: bool = True,
         force_local: bool = False,
     ) -> None:
         """Run an external command in a subprocess."""
         str_args = tuple(str(arg) for arg in args)
-        if force_local or self.proc.ssh is None:
-            self._print_command(" ".join(str_args))
-        else:
-            self._print_command(f"""ssh {self.proc.address} {" ".join(str_args)}""")
+        if log_command:
+            if force_local or self.proc.ssh is None:
+                self._print_command(" ".join(str_args))
+            else:
+                self._print_command(f"""ssh {self.proc.address} {" ".join(str_args)}""")
         if self.dry_run:
             return
 
@@ -468,32 +471,10 @@ class BlueBackup:
                 "Total transferred file size:",
             ))
         ]
-        self._print_output(" / ".join(out_lines), to_log_file=False)
+        self._print_output(" / ".join(out_lines), log_to_file=False)
 
-    def create_new_backup_folder(self) -> None:
+    def create_backup_folder(self) -> None:
         """Prepare a new folder for today's backup."""
-        if len(self.folder_list) == 0:
-            raise BlueError(
-                "This is the first time you are backing up to this folder, "
-                "specify --first-time"
-            )
-        last_folder = max(self.folder_list)
-        if self.target_is_btrfs:
-            # When using btrfs snapshots, first set last snapshot to readonly:
-            self._run(
-                "/usr/bin/btrfs", "property", "set", "-ts", last_folder, "ro", "true"
-            )
-            self._run(
-                "/usr/bin/btrfs", "subvolume", "snapshot",
-                last_folder, self.today_folder
-            )
-        else:
-            # Create snapshot using hard links.
-            self._run("/usr/bin/cp", "-al", last_folder, self.today_folder)
-        self.folder_list.append(self.today_folder)
-
-    def backup(self) -> None:
-        """Perform the actual backup."""
         new_day = self.today_folder not in self.folder_list
 
         if self.first_time:
@@ -507,9 +488,35 @@ class BlueBackup:
             else:
                 self._run("/usr/bin/mkdir", self.today_folder)
 
-        elif new_day:
-            # New day - new backup folder:
-            self.create_new_backup_folder()
+        elif new_day:  # New day - duplicate last backup folder:
+            if len(self.folder_list) == 0:
+                raise BlueError(
+                    "This is the first time you are backing up to this folder, "
+                    "specify --first-time"
+                )
+            last_folder = max(self.folder_list)
+            if self.target_is_btrfs:
+                # When using btrfs snapshots, first set last snapshot to readonly:
+                self._run(
+                    "/usr/bin/btrfs", "property", "set", "-ts",
+                    last_folder, "ro", "true"
+                )
+                self._run(
+                    "/usr/bin/btrfs", "subvolume", "snapshot",
+                    last_folder, self.today_folder
+                )
+            else:
+                # Create snapshot using hard links.
+                self._run("/usr/bin/cp", "-al", last_folder, self.today_folder)
+            self.folder_list.append(self.today_folder)
+
+    def backup(self) -> None:
+        """Perform the actual backup."""
+        if self.log_summary:
+            self._print_output(f"Backup: {self.today_folder}")
+            self._indent = "    "
+
+        self.create_backup_folder()
 
         rsync_command = [
             "/usr/bin/rsync", "--archive", "--human-readable", "--info=stats2",
@@ -527,10 +534,10 @@ class BlueBackup:
             rsync_command.append("--checksum")
 
         for backup_folder in self.config.backup_folders:
-            if self.print_summary:
+            if self.log_summary:
                 # Full rsync command is not printed. Print short summary instead:
                 self._print_output(
-                    f"rsync {backup_folder.get_source_location()}", to_log_file=False
+                    f"rsync {backup_folder.get_source_location()}", log_to_file=False
                 )
             # str(path / "_")[:-1] is to ensure that path ends with a "/".
             source_folder_str = backup_folder.get_source_location()
@@ -593,13 +600,11 @@ class BlueBackup:
         parser.add_argument("--first-time", action="store_true")
         parser.add_argument("--dry-run", action="store_true")
         parser.add_argument("--checksum", action="store_true")
-        parser.add_argument("--print-summary", action="store_true")
+        parser.add_argument("--log-summary", action="store_true")
         args = parser.parse_args()
 
         config = Config.from_toml(args.toml_config)
-        backup_args = vars(args)
-
-        return cls(config=config, **backup_args)
+        return cls(config=config, **vars(args))
 
 
 def main() -> None:
