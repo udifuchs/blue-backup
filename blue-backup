@@ -256,7 +256,8 @@ class BackupFolder:
         if "target" in folder_info:
             target_path = pathlib.Path(folder_info.pop("target"))
         else:
-            target_path = source_path.relative_to("/")
+            stripped_source_path = str(source_path).format(TOML_FOLDER="")
+            target_path = pathlib.Path(stripped_source_path).relative_to("/")
         exclude = tuple(folder_info.pop("exclude")) if "exclude" in folder_info else ()
         for key in folder_info:
             Logger.WARNING.print(f"Unknown field for '{source_location}': '{key}'")
@@ -593,7 +594,7 @@ class BlueBackup:
         self._run("/usr/bin/df", "--human-readable", self.today_folder)
 
     @classmethod
-    def from_command_line_arguments(cls) -> Self:
+    def from_command_line_arguments(cls, args: Sequence[str]) -> Self:
         """Initialize a Backup class instance from command line arguments."""
         parser = argparse.ArgumentParser()
         parser.add_argument("toml_config", nargs="?", default="blue-backup.toml")
@@ -601,16 +602,16 @@ class BlueBackup:
         parser.add_argument("--dry-run", action="store_true")
         parser.add_argument("--checksum", action="store_true")
         parser.add_argument("--log-summary", action="store_true")
-        args = parser.parse_args()
+        args_namespace = parser.parse_args(args)
 
-        config = Config.from_toml(args.toml_config)
-        return cls(config=config, **vars(args))
+        config = Config.from_toml(args_namespace.toml_config)
+        return cls(config=config, **vars(args_namespace))
 
 
-def main() -> None:
+def main(args: Sequence[str]) -> None:
     """Backup main entry-point."""
     try:
-        backup = BlueBackup.from_command_line_arguments()
+        backup = BlueBackup.from_command_line_arguments(args)
         with PIDFile(backup.toml_config + ".pid"):
             backup.backup()
             backup.purge(keep=20)
@@ -621,4 +622,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])
