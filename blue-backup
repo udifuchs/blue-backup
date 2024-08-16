@@ -393,10 +393,12 @@ class BlueBackup:
             str_out = output.decode("utf8").strip()  # Remove any newlines.
             self.target_is_btrfs = str_out == "btrfs"
 
+        save_dry_run, self.dry_run = self.dry_run, False
         self._run(
             "/usr/bin/stat", "--file-system", "--format=%T", self.config.target_path,
             filter_output=check_stat_output, log_command=False
         )
+        self.dry_run = save_dry_run
 
     def _print_output(self, text: str, *, log_to_file: bool = True) -> None:
         Logger.OUTPUT.print(text, self._indent)
@@ -591,7 +593,9 @@ class BlueBackup:
 
     def disk_space(self) -> None:
         """Report available disk space in target location."""
-        self._run("/usr/bin/df", "--human-readable", self.today_folder)
+        self._run(
+            "/usr/bin/df", "--human-readable", self.today_folder, log_command=False
+        )
 
     @classmethod
     def from_command_line_arguments(cls, args: Sequence[str]) -> Self:

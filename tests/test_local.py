@@ -47,6 +47,9 @@ def test_local(
         "specify --first-time\n"
     )
 
+    # Test a dry run:
+    blue_backup.main(["--first-time", "--dry-run", toml_filename])
+
     # Successful first run:
     blue_backup.main(["--first-time", toml_filename])
 
