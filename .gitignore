@@ -1,2 +1,7 @@
+# python cache:
+__pycache__
 # tox working folder:
 /.tox/
+# coverage data file:
+/.coverage
+
