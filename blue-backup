@@ -598,7 +598,7 @@ class BlueBackup:
         )
 
     @classmethod
-    def from_command_line_arguments(cls, args: Sequence[str]) -> Self:
+    def from_command_line_arguments(cls, *args: str) -> Self:
         """Initialize a Backup class instance from command line arguments."""
         parser = argparse.ArgumentParser()
         parser.add_argument("toml_config", nargs="?", default="blue-backup.toml")
@@ -612,10 +612,10 @@ class BlueBackup:
         return cls(config=config, **vars(args_namespace))
 
 
-def main(args: Sequence[str]) -> None:
+def main(*args: str) -> None:
     """Backup main entry-point."""
     try:
-        backup = BlueBackup.from_command_line_arguments(args)
+        backup = BlueBackup.from_command_line_arguments(*args)
         with PIDFile(backup.toml_config + ".pid"):
             backup.backup()
             backup.purge(keep=20)
@@ -626,4 +626,4 @@ def main(args: Sequence[str]) -> None:
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    main(*sys.argv[1:])
