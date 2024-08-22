@@ -81,8 +81,13 @@ def test_local(
         "remove --first-time\n"
     )
 
-    # Successful second run:
-    blue_backup.main(toml_filename)
+    # Second run that should succeed. Also test --log-summary:
+    blue_backup.main(toml_filename, "--log-summary")
+    captured = capsys.readouterr()
+    assert (
+        captured.out.startswith(f"Backup: {target_path}/{today}") or
+        captured.out.startswith(f"Backup: 127.0.0.1:{target_path}/{today}")
+    )
 
 
 @contextlib.contextmanager

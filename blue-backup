@@ -516,7 +516,7 @@ class BlueBackup:
     def backup(self) -> None:
         """Perform the actual backup."""
         if self.log_summary:
-            self._print_output(f"Backup: {self.today_folder}")
+            self._print_output(f"Backup: {self.proc.get_full_path(self.today_folder)}")
             self._indent = "    "
 
         self.create_backup_folder()
