@@ -1,4 +1,6 @@
 """Test functionality of blue-backup."""
+
+import contextlib
 import datetime
 import getpass
 import importlib
@@ -7,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+from typing import Iterator
 
 import pytest
 
@@ -82,18 +85,17 @@ def test_local(
     blue_backup.main(toml_filename)
 
 
-def test_btrfs(
-    tmp_path: pathlib.Path,
-    capsys: pytest.CaptureFixture[str],
-    toml_config: str = "blue-local.toml",
-) -> None:
-    """Test backup to a btrfs target location."""
-    rootdir = tmp_path / "rootdir"
+@contextlib.contextmanager
+def btrfs_mount_point(
+    path: pathlib.Path, *, test_already_mounted: bool = False
+) -> Iterator[pathlib.Path]:
+    """Context manager for creating a btrfs mount point."""
+    rootdir = path / "rootdir"
     rootdir.mkdir()
-    btrfs_img = tmp_path / "btrfs.img"
+    btrfs_img = path / "btrfs.img"
     # Create the image file to prevent the message to stderr:
     # ERROR: zoned: unable to stat btrfs.img
-    subprocess.run(["/usr/bin/touch", str(btrfs_img)], check=True)
+    btrfs_img.touch()
     # The --rootdir option determines the filesystem owner and permissions.
     # Without it, the filesystem is limited to superuser access.
     # The --mixed option minimizes the size of the filesystem to 16M bytes.
@@ -102,7 +104,10 @@ def test_btrfs(
         check=True,
     )
     proc = subprocess.run(
-        ["/usr/bin/udisksctl", "loop-setup", "--file", str(btrfs_img)],
+        [
+            "/usr/bin/udisksctl", "loop-setup", "--no-user-interaction",
+            "--file", str(btrfs_img)
+        ],
         check=True, capture_output=True
     )
     # Output udisksctl looks like:
@@ -112,14 +117,81 @@ def test_btrfs(
     loop_dev = match.group(2)
     try:
         proc = subprocess.run(
-            ["/usr/bin/udisksctl", "mount", "--block-device", loop_dev],
-            check=True, capture_output=True
+            [
+                "/usr/bin/udisksctl", "mount", "--no-user-interaction",
+                "--block-device", loop_dev
+            ],
+            check=False, capture_output=True
         )
-        # Mounted /dev/loop0 at /media/USER/UUID
-        match = re.search(r"Mounted (\S+) at (\S+)", proc.stdout.decode("utf-8"))
-        assert match is not None
-        mount_point = pathlib.Path(match.group(2))
+        if test_already_mounted and proc.returncode == 0:
+            proc = subprocess.run(
+                [
+                    "/usr/bin/udisksctl", "mount", "--no-user-interaction",
+                    "--block-device", loop_dev
+                ],
+                check=False, capture_output=True
+            )
+        if proc.returncode == 1:
+            # The udisk2 service might mount the loop device before we do.
+            # This would emit the following error message:
+            # Error mounting {loop_dev}:
+            # GDBus.Error:org.freedesktop.UDisks2.Error.AlreadyMounted:
+            # Device /dev/loop0 is already mounted at `{mount_point}'.\n\n"
+            assert b"org.freedesktop.UDisks2.Error.AlreadyMounted:" in proc.stderr
+            match = re.search(
+                r"already mounted at `(\S+)'", proc.stderr.decode("utf-8")
+            )
+            assert match is not None
+            mount_point = pathlib.Path(match.group(1))
+        else:
+            # Mounted {loop_dev} at {mount_point}
+            match = re.search(r"Mounted (\S+) at (\S+)", proc.stdout.decode("utf-8"))
+            assert match is not None
+            mount_point = pathlib.Path(match.group(2))
 
+        yield mount_point
+
+    finally:
+        subprocess.run(
+            [
+                "/usr/bin/udisksctl", "unmount", "--no-user-interaction",
+                "--block-device", loop_dev
+            ],
+            check=True
+        )
+        proc = subprocess.run(
+            [
+                "/usr/bin/udisksctl", "loop-delete", "--no-user-interaction",
+                "--block-device", loop_dev
+            ],
+            check=False, capture_output=True
+        )
+        if proc.returncode == 1:
+            # Ignore harmless error that sometimes shows up in loop-delete:
+
+            # Error deleting loop device /dev/loop1:
+            # GDBus.Error:org.freedesktop.UDisks2.Error.NotAuthorizedCanObtain:
+            # Not authorized to perform operation
+
+            assert (  # pragma: no cover
+                b"GDBus.Error:org.freedesktop.UDisks2.Error.NotAuthorizedCanObtain"
+                in proc.stderr
+            )
+
+
+def test_btrfs_mount_point(tmp_path: pathlib.Path) -> None:
+    """Test the btrfs_mount_point context manager."""
+    with btrfs_mount_point(tmp_path, test_already_mounted=True):
+        pass
+
+
+def test_btrfs(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    toml_config: str = "blue-local.toml",
+) -> None:
+    """Test backup to a btrfs target location."""
+    with btrfs_mount_point(tmp_path) as mount_point:
         # Run the local test in the btrfs:
         test_local(mount_point, capsys, toml_config)
 
@@ -137,22 +209,12 @@ def test_btrfs(
         toml_filename = str(mount_point / toml_config)
         # Test blue-backup failure with full device:
         with pytest.raises(
-            OSError,
-            match=rf"\[Errno 28\] No space left on device: '{mount_point}.*'"
+            OSError, match=rf"\[Errno 28\] No space left on device: '{mount_point}.*'"
         ):
             blue_backup.main(toml_filename)
-    finally:
-        subprocess.run(
-            ["/usr/bin/udisksctl", "unmount", "--block-device", loop_dev],
-            check=True
-        )
-        subprocess.run(
-            ["/usr/bin/udisksctl", "loop-delete", "--block-device", loop_dev],
-            check=True
-        )
 
 
-# Remote test use local address 127.0.0.1. Therefore, these tests will fail
+# Remote tests use local address 127.0.0.1. Therefore, these tests will fail
 # to catch bugs of mixing between local and remote location.
 # Before running the test it is recommended to: ssh-copy-id 127.0.0.1
 
