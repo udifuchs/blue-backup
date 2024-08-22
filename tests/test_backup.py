@@ -1,5 +1,6 @@
-"""Test functionality for local backup."""
+"""Test functionality of blue-backup."""
 import datetime
+import getpass
 import importlib
 import pathlib
 import re
@@ -21,24 +22,25 @@ loader.exec_module(blue_backup)
 def test_local(
     tmp_path: pathlib.Path,
     capsys: pytest.CaptureFixture[str],
+    toml_config: str = "blue-local.toml",
 ) -> None:
     """Test functionality for local backup."""
     # The configuration file is copied so that TOML_FOLDER would point to tmp_path.
-    toml_filename = str(tmp_path / "blue-test-local.toml")
-    shutil.copy("tests/blue-test-local.toml", toml_filename)
+    toml_filename = str(tmp_path / toml_config)
+    shutil.copy(f"tests/{toml_config}", toml_filename)
     shutil.copytree("tests/data-to-backup", tmp_path / "data-to-backup")
 
+    target_path = tmp_path / "target"
     # Try and fail backup to non-existing target folder:
     with pytest.raises(SystemExit, match="1"):
         blue_backup.main(toml_filename)
     captured = capsys.readouterr()
     assert re.match(
             "Failed reading target location '(.)*/target': "
-            r"\[Errno 2\] No such file or directory: '(.)*/target'\n",
+            rf"\[Errno 2\] No such file(| or directory: '{target_path}')\n",
             captured.err
     ) is not None
 
-    target_path = tmp_path / "target"
     target_path.mkdir()
     # First run, forget specifying --first-time:
     with pytest.raises(SystemExit, match="1"):
@@ -52,9 +54,13 @@ def test_local(
 
     # Test a dry run:
     blue_backup.main("--first-time", "--dry-run", toml_filename)
+    captured = capsys.readouterr()
+    assert captured.err == ""
 
     # Successful first run:
     blue_backup.main("--first-time", toml_filename)
+    captured = capsys.readouterr()
+    assert captured.err == ""
 
     today = datetime.date.today()
     # Check that file-1.txt was backed up:
@@ -79,6 +85,7 @@ def test_local(
 def test_btrfs(
     tmp_path: pathlib.Path,
     capsys: pytest.CaptureFixture[str],
+    toml_config: str = "blue-local.toml",
 ) -> None:
     """Test backup to a btrfs target location."""
     rootdir = tmp_path / "rootdir"
@@ -114,7 +121,7 @@ def test_btrfs(
         mount_point = pathlib.Path(match.group(2))
 
         # Run the local test in the btrfs:
-        test_local(mount_point, capsys)
+        test_local(mount_point, capsys, toml_config)
 
         # Fill up the btrfs with zeros:
         proc = subprocess.run(
@@ -127,7 +134,7 @@ def test_btrfs(
             f"/usr/bin/cp: error writing '{mount_point}/zero': "
             "No space left on device\n"
         )
-        toml_filename = str(mount_point / "blue-test-local.toml")
+        toml_filename = str(mount_point / toml_config)
         # Test blue-backup failure with full device:
         with pytest.raises(
             OSError,
@@ -143,3 +150,71 @@ def test_btrfs(
             ["/usr/bin/udisksctl", "loop-delete", "--block-device", loop_dev],
             check=True
         )
+
+
+# Remote test use local address 127.0.0.1. Therefore, these tests will fail
+# to catch bugs of mixing between local and remote location.
+# Before running the test it is recommended to: ssh-copy-id 127.0.0.1
+
+def test_remote_target(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test backup to a remote target location."""
+    test_local(tmp_path, capsys, "blue-remote-target.toml")
+
+
+def test_remote_btrfs_target(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test backup to a remote target location."""
+    test_btrfs(tmp_path, capsys, "blue-remote-target.toml")
+
+
+def test_remote_source(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test backup to a remote source location."""
+    test_local(tmp_path, capsys, "blue-remote-source.toml")
+
+
+def test_remote_target_and_source(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test backup to a remote target and source location."""
+    with pytest.raises(AssertionError) as exc_info:
+        test_local(tmp_path, capsys, "blue-remote-target-and-source.toml")
+    assert "The source and destination cannot both be remote." in str(exc_info.value)
+
+    # Test that local source was backed up despite the error:
+    target_path = tmp_path / "target"
+    today = datetime.date.today()
+    # Check that file-1.txt was backed up:
+    assert (target_path / str(today) / "local" / "file-1.txt").exists()
+
+
+def test_process_class(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Direct tests of the Process class."""
+    monkeypatch.setattr(getpass, "getpass", lambda _prompt: "wrong-password")
+    with pytest.raises(blue_backup.BlueError) as exc_info:
+        blue_backup.Process("no-such-user@127.0.0.1")
+    assert (
+        str(exc_info.value) == "Failed connecting to 127.0.0.1: Authentication failed."
+    )
+
+    proc = blue_backup.Process(address=None)
+    with pytest.raises(blue_backup.BlueError) as exc_info:
+        proc.open(pathlib.Path("/no-such-file"), "r")
+    assert str(exc_info.value) == "File '/no-such-file' must be opened in binary mode"
+
+    proc = blue_backup.Process(address=None)
+    with pytest.raises(blue_backup.BlueError) as exc_info:
+        proc.open(pathlib.Path("/no-such-file"), "rb")
+    assert (
+        str(exc_info.value) ==
+        "Failed opening '/no-such-file': "
+        "[Errno 2] No such file or directory: '/no-such-file'"
+    )
