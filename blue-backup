@@ -490,6 +490,7 @@ class BlueBackup:
                 self._run("/usr/bin/btrfs", "subvolume", "create", self.today_folder)
             else:
                 self._run("/usr/bin/mkdir", self.today_folder)
+            self.folder_list.append(self.today_folder)
 
         elif new_day:  # New day - duplicate last backup folder:
             if len(self.folder_list) == 0:

@@ -11,6 +11,11 @@ import subprocess
 import sys
 from typing import Iterator
 
+if sys.version_info >= (3, 11):
+    from typing import Self
+else:  # Avoid depending on typing-extensions
+    from typing import Any as Self
+
 import pytest
 
 # blue-backup requires special import because of hyphen in name and not ending in .py:
@@ -21,17 +26,38 @@ blue_backup = importlib.util.module_from_spec(spec)
 sys.modules["blue_backup"] = blue_backup
 loader.exec_module(blue_backup)
 
+# Select first fake date to test accumulation of monthly backups:
+FIRST_FAKE_DATE = 1999, 12, 25
+
+
+class FakeDate(datetime.date):
+    """Fake the date class to mock today's date."""
+
+    fake_today = FIRST_FAKE_DATE
+
+    @classmethod
+    def today(cls) -> Self:
+        """Mock today's date."""
+        return cls(*FakeDate.fake_today)
+
+
+datetime.date = FakeDate  # type: ignore[misc]
+
 
 def test_local(
     tmp_path: pathlib.Path,
     capsys: pytest.CaptureFixture[str],
     toml_config: str = "blue-local.toml",
+    *,
+    short_test: bool = False,
 ) -> None:
     """Test functionality for local backup."""
     # The configuration file is copied so that TOML_FOLDER would point to tmp_path.
     toml_filename = str(tmp_path / toml_config)
     shutil.copy(f"tests/{toml_config}", toml_filename)
     shutil.copytree("tests/data-to-backup", tmp_path / "data-to-backup")
+
+    FakeDate.fake_today = FIRST_FAKE_DATE
 
     target_path = tmp_path / "target"
     # Try and fail backup to non-existing target folder:
@@ -64,12 +90,17 @@ def test_local(
     blue_backup.main("--first-time", toml_filename)
     captured = capsys.readouterr()
     assert captured.err == ""
+    assert "Kept monthly backups: 1" in captured.out
+    assert "Kept daily backups: 0" in captured.out
 
     today = datetime.date.today()
     # Check that file-1.txt was backed up:
     assert (target_path / str(today) / "data-to-backup" / "file-1.txt").exists()
     # Check that cache was not backed up:
     assert not (target_path / str(today) / "data-to-backup" / "cache").exists()
+
+    if short_test:
+        return
 
     # Second backup, forget removing --first-time:
     with pytest.raises(SystemExit, match="1"):
@@ -88,7 +119,19 @@ def test_local(
         captured.out.startswith(f"Backup: {target_path}/{today}") or
         captured.out.startswith(f"Backup: 127.0.0.1:{target_path}/{today}")
     )
+    assert "Kept monthly backups: 1" in captured.out
+    assert "Kept daily backups: 0" in captured.out
 
+    # Loop over enough days to have old daily backups removed:
+    for i in range(1, 23):
+        next_date = FakeDate.today() + datetime.timedelta(days=1)
+        FakeDate.fake_today = next_date.timetuple()[:3]
+        blue_backup.main(toml_filename, "--log-summary")
+        captured = capsys.readouterr()
+        monthly_backups = 1 if FIRST_FAKE_DATE[0] in FakeDate.fake_today else 2
+        assert f"Kept monthly backups: {monthly_backups}" in captured.out
+        daily_backups = min(i + 1 - monthly_backups, 20)
+        assert f"Kept daily backups: {daily_backups}" in captured.out
 
 @contextlib.contextmanager
 def btrfs_mount_point(
@@ -194,11 +237,13 @@ def test_btrfs(
     tmp_path: pathlib.Path,
     capsys: pytest.CaptureFixture[str],
     toml_config: str = "blue-local.toml",
+    *,
+    short_test: bool = False,
 ) -> None:
     """Test backup to a btrfs target location."""
     with btrfs_mount_point(tmp_path) as mount_point:
         # Run the local test in the btrfs:
-        test_local(mount_point, capsys, toml_config)
+        test_local(mount_point, capsys, toml_config, short_test=short_test)
 
         # Fill up the btrfs with zeros:
         proc = subprocess.run(
@@ -228,7 +273,7 @@ def test_remote_target(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Test backup to a remote target location."""
-    test_local(tmp_path, capsys, "blue-remote-target.toml")
+    test_local(tmp_path, capsys, "blue-remote-target.toml", short_test=True)
 
 
 def test_remote_btrfs_target(
@@ -236,7 +281,7 @@ def test_remote_btrfs_target(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Test backup to a remote target location."""
-    test_btrfs(tmp_path, capsys, "blue-remote-target.toml")
+    test_btrfs(tmp_path, capsys, "blue-remote-target.toml", short_test=True)
 
 
 def test_remote_source(
@@ -244,7 +289,7 @@ def test_remote_source(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Test backup to a remote source location."""
-    test_local(tmp_path, capsys, "blue-remote-source.toml")
+    test_local(tmp_path, capsys, "blue-remote-source.toml", short_test=True)
 
 
 def test_remote_target_and_source(
@@ -253,7 +298,9 @@ def test_remote_target_and_source(
 ) -> None:
     """Test backup to a remote target and source location."""
     with pytest.raises(AssertionError) as exc_info:
-        test_local(tmp_path, capsys, "blue-remote-target-and-source.toml")
+        test_local(
+            tmp_path, capsys, "blue-remote-target-and-source.toml", short_test=True
+        )
     assert "The source and destination cannot both be remote." in str(exc_info.value)
 
     # Test that local source was backed up despite the error:
