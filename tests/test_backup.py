@@ -92,6 +92,7 @@ def test_local(
     assert captured.err == ""
     assert "Kept monthly backups: 1" in captured.out
     assert "Kept daily backups: 0" in captured.out
+    assert captured.err == ""
 
     today = datetime.date.today()
     # Check that file-1.txt was backed up:
@@ -121,7 +122,17 @@ def test_local(
     )
     assert "Kept monthly backups: 1" in captured.out
     assert "Kept daily backups: 0" in captured.out
+    assert captured.err == ""
 
+    subtest_multi_dates_backup(toml_filename, capsys)
+    subtest_iso_date_folders(target_path, toml_filename, capsys)
+
+
+def subtest_multi_dates_backup(
+    toml_filename: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Simulate backups on multiple days."""
     # Loop over enough days to have old daily backups removed:
     for i in range(1, 23):
         next_date = FakeDate.today() + datetime.timedelta(days=1)
@@ -132,6 +143,41 @@ def test_local(
         assert f"Kept monthly backups: {monthly_backups}" in captured.out
         daily_backups = min(i + 1 - monthly_backups, 20)
         assert f"Kept daily backups: {daily_backups}" in captured.out
+        if captured.err != "":
+            # Deleting a btrfs subvolume without root permissions is tricky.
+            assert (
+                "ERROR: Could not destroy subvolume/snapshot: Operation not permitted"
+                in captured.err
+            )
+
+
+def subtest_iso_date_folders(
+    target_path: pathlib.Path,
+    toml_filename: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test handling of wrong ISO date folders in target path."""
+    (target_path / "not-iso-date").mkdir()
+    blue_backup.main(toml_filename)
+    captured = capsys.readouterr()
+    assert (
+        "Folder not-iso-date, non ISO date: Invalid isoformat string: "
+        "'not-iso-date'" in captured.err
+    )
+
+    # YYYMMDD is an ISO date, but not in a format blue-backup accepts.
+    (target_path / "20191204").mkdir()
+    blue_backup.main(toml_filename)
+    captured = capsys.readouterr()
+    if sys.version_info >= (3, 11):
+        assert (
+            "Folder 20191204, non ISO date: 20191204 != 2019-12-04" in captured.err
+        )
+    else:
+        assert (
+            "Folder 20191204, non ISO date: Invalid isoformat string: '20191204'"
+            in captured.err
+        )
 
 @contextlib.contextmanager
 def btrfs_mount_point(
