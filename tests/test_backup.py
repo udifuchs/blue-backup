@@ -65,9 +65,7 @@ def test_local(
         blue_backup.main(toml_filename)
     captured = capsys.readouterr()
     assert re.match(
-            "Failed reading target location '(.)*/target': "
-            rf"\[Errno 2\] No such file(| or directory: '{target_path}')\n",
-            captured.err
+        "Error writing to target location '(.)*/target':", captured.err
     ) is not None
 
     target_path.mkdir()
@@ -370,11 +368,15 @@ def test_process_class(monkeypatch: pytest.MonkeyPatch) -> None:
         proc.open(pathlib.Path("/no-such-file"), "r")
     assert str(exc_info.value) == "File '/no-such-file' must be opened in binary mode"
 
-    proc = blue_backup.Process(address=None)
-    with pytest.raises(blue_backup.BlueError) as exc_info:
+    with pytest.raises(FileNotFoundError) as exc_info:
         proc.open(pathlib.Path("/no-such-file"), "rb")
     assert (
-        str(exc_info.value) ==
-        "Failed opening '/no-such-file': "
-        "[Errno 2] No such file or directory: '/no-such-file'"
+        str(exc_info.value) == "[Errno 2] No such file or directory: '/no-such-file'"
+    )
+
+    proc = blue_backup.Process(address="127.0.0.1")
+    with pytest.raises(FileNotFoundError) as exc_info:
+        proc.open(pathlib.Path("/no-such-file"), "rb")
+    assert (
+        str(exc_info.value) == "[Errno 2] No such file"
     )

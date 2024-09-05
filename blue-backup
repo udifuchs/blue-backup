@@ -215,15 +215,10 @@ class Process:
         """Open file locally or remotely."""
         if "b" not in mode:
             raise BlueError(f"File '{filepath}' must be opened in binary mode")
-        try:
-            if self.sftp is None:
-                return filepath.open(mode=mode)
-            sftp_file = self.sftp.file(str(filepath), mode)
-            return cast(BinaryIO, sftp_file)
-        except OSError as ex:
-            raise BlueError(
-                f"Failed opening '{self.get_full_path(filepath)}': {ex}"
-            ) from ex
+        if self.sftp is None:
+            return filepath.open(mode=mode)
+        sftp_file = self.sftp.file(str(filepath), mode)
+        return cast(BinaryIO, sftp_file)
 
 
 class FolderInfo(TypedDict, total=False):
@@ -359,9 +354,21 @@ class BlueBackup:
         """Prepare for backup."""
         self.config.check_all_paths_absolute()
         self.proc = Process(self.config.target_address)
-        self.folder_list: list[pathlib.Path] = []
-
+        today = datetime.date.today()
+        self.today_folder = self.config.target_path / str(today)
+        self.log_file = self.today_folder.with_suffix(".log")
+        self._indent = ""
         try:
+            self._print_output(f"Backup: {self.proc.get_full_path(self.today_folder)}")
+        except OSError as ex:
+            raise BlueError(
+                "Error writing to target location "
+                f"'{self.config.get_target_location()}': {ex}"
+            ) from ex
+        if self.log_summary:
+            self._indent = "    "
+        try:
+            self.folder_list: list[pathlib.Path] = []
             for path_attr in self.proc.iterdir_attr(self.config.target_path):
                 if path_attr.st_mode is not None and stat.S_ISDIR(path_attr.st_mode):
                     folder_path = self.config.target_path / path_attr.filename
@@ -371,7 +378,7 @@ class BlueBackup:
                         if folder_path.name != iso_date:
                             raise ValueError(f"{folder_path.name} != {iso_date}")
                     except ValueError as ex:
-                        Logger.WARNING.print(
+                        self._print_warning(
                             f"Folder {folder_path.name}, non ISO date: {ex}"
                         )
                     else:
@@ -382,10 +389,6 @@ class BlueBackup:
                 f"'{self.config.get_target_location()}': {ex}"
             ) from ex
 
-        today = datetime.date.today()
-        self.today_folder = self.config.target_path / str(today)
-        self.log_file = self.today_folder.with_suffix(".log")
-        self._indent = ""
         self.target_is_btrfs: bool
 
         def check_stat_output(output: bytes) -> None:
@@ -400,25 +403,29 @@ class BlueBackup:
         )
         self.dry_run = save_dry_run
 
-    def _print_output(self, text: str, *, log_to_file: bool = True) -> None:
-        Logger.OUTPUT.print(text, self._indent)
-        if log_to_file and not self.dry_run:
+    def _log_to_file(self, text: str) -> None:
+        if not self.dry_run:
             with self.proc.open(self.log_file, mode="ab") as log_file:
                 log_file.write(f"{text}\n".encode())
+
+    def _print_output(self, text: str, *, log_to_file: bool = True) -> None:
+        Logger.OUTPUT.print(text, self._indent)
+        if log_to_file:
+            self._log_to_file(text)
 
     def _print_command(self, text: str) -> None:
         if not self.log_summary:
             # Do not print commands in summary mode.
             Logger.COMMAND.print(text, self._indent)
-        if not self.dry_run:
-            with self.proc.open(self.log_file, mode="ab") as log_file:
-                log_file.write(f"\n{text}\n".encode())
+        self._log_to_file(f"\n{text}")
+
+    def _print_warning(self, text: str) -> None:
+        Logger.WARNING.print(text, self._indent)
+        self._log_to_file(f"{text}")
 
     def _print_error(self, text: str) -> None:
         Logger.ERROR.print(text, self._indent)
-        if not self.dry_run:
-            with self.proc.open(self.log_file, mode="ab") as log_file:
-                log_file.write(f"{text}\n".encode())
+        self._log_to_file(f"{text}")
 
     def _run(
         self,
@@ -516,10 +523,6 @@ class BlueBackup:
 
     def backup(self) -> None:
         """Perform the actual backup."""
-        if self.log_summary:
-            self._print_output(f"Backup: {self.proc.get_full_path(self.today_folder)}")
-            self._indent = "    "
-
         self.create_backup_folder()
 
         rsync_command = [
