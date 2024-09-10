@@ -4,11 +4,11 @@
 from __future__ import annotations
 
 import argparse
-import atexit
 import contextlib
 import dataclasses
 import datetime
 import enum
+import fcntl
 import getpass
 import os
 import pathlib
@@ -72,80 +72,18 @@ class Logger(enum.Enum):
         stream.flush()
 
 
-class AlreadyRunningError(BlueError):
-    """A different process is currently holding this PID file."""
-
-
-class PIDFile:
-    """Context manager for PID files."""
-    # Based on: https://github.com/mosquito/python-pidfile
-
-    def __init__(self, filename: str) -> None:
-        self._filepath = pathlib.Path(filename)
-
-    @staticmethod
-    def _get_cmdline(pid: int) -> list[str]:
-        # Based on psutil/_pslinux.py
-        cmdline_path = pathlib.Path(f"/proc/{pid}/cmdline")
-        with cmdline_path.open("r", encoding="utf-8") as cmdline_file:
-            cmdline = cmdline_file.read()
-            if not cmdline:  # may happen in case of zombie process
-                return []
-            if cmdline.endswith("\x00"):
-                cmdline = cmdline[:-1]
-        return cmdline.split("\x00")
-
-    @property
-    def is_running(self) -> bool:
-        """Check if PID file exists and if there is a process using it."""
-        if not self._filepath.exists():
-            return False
-
-        with self._filepath.open(mode="r", encoding="utf-8") as pid_file:
-            try:
-                pid = int(pid_file.read())
-            except (OSError, ValueError):
-                return False
-
-        # Check if pid currently exists:
+@contextlib.contextmanager
+def lock_file(filename: str) -> Iterator[BinaryIO]:
+    """Create an exclusive lock on an existing file."""
+    with pathlib.Path(filename).open("rb") as flock_file:
         try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            pass
-
+            fcntl.flock(flock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as ex:
+            raise BlueError(f"Failed locking {filename}: {ex}") from ex
         try:
-            pid_cmdline = self._get_cmdline(pid)
-            my_cmdline = self._get_cmdline(os.getpid())
-        except PermissionError:
-            return False
-        # cmdline[0] should be "python3".
-        # cmdline[1] should be the path to this python code.
-        return pid_cmdline[0] == my_cmdline[0] and pid_cmdline[1] == my_cmdline[1]
-
-    def close(self) -> None:
-        """Remove PID file."""
-        if self._filepath.exists():
-            with contextlib.suppress(OSError):
-                self._filepath.unlink()
-
-    def __enter__(self) -> Self:
-        """Try to create the PID file to enter the context manager."""
-        if self.is_running:
-            raise AlreadyRunningError(f"Process for {self._filepath} already running.")
-
-        with self._filepath.open("w", encoding="utf-8") as pid_file:
-            pid_file.write(str(os.getpid()))
-
-        atexit.register(self.close)
-
-        return self
-
-    def __exit__(self, *_args: object) -> None:
-        """Remove the PID file on exiting the context manager."""
-        self.close()
-        atexit.unregister(self.close)
+            yield flock_file
+        finally:
+            fcntl.flock(flock_file, fcntl.LOCK_UN)
 
 
 class Process:
@@ -360,34 +298,29 @@ class BlueBackup:
         self._indent = ""
         try:
             self._print_output(f"Backup: {self.proc.get_full_path(self.today_folder)}")
-        except OSError as ex:
+        except BlueError as ex:
             raise BlueError(
                 "Error writing to target location "
                 f"'{self.config.get_target_location()}': {ex}"
             ) from ex
         if self.log_summary:
             self._indent = "    "
-        try:
-            self.folder_list: list[pathlib.Path] = []
-            for path_attr in self.proc.iterdir_attr(self.config.target_path):
-                if path_attr.st_mode is not None and stat.S_ISDIR(path_attr.st_mode):
-                    folder_path = self.config.target_path / path_attr.filename
-                    try:
-                        date = datetime.date.fromisoformat(folder_path.name)
-                        iso_date = date.isoformat()
-                        if folder_path.name != iso_date:
-                            raise ValueError(f"{folder_path.name} != {iso_date}")
-                    except ValueError as ex:
-                        self._print_warning(
-                            f"Folder {folder_path.name}, non ISO date: {ex}"
-                        )
-                    else:
-                        self.folder_list.append(folder_path)
-        except OSError as ex:
-            raise BlueError(
-                f"Failed reading target location "
-                f"'{self.config.get_target_location()}': {ex}"
-            ) from ex
+
+        self.folder_list: list[pathlib.Path] = []
+        for path_attr in self.proc.iterdir_attr(self.config.target_path):
+            if path_attr.st_mode is not None and stat.S_ISDIR(path_attr.st_mode):
+                folder_path = self.config.target_path / path_attr.filename
+                try:
+                    date = datetime.date.fromisoformat(folder_path.name)
+                    iso_date = date.isoformat()
+                    if folder_path.name != iso_date:
+                        raise ValueError(f"{folder_path.name} != {iso_date}")
+                except ValueError as ex:
+                    self._print_warning(
+                        f"Folder {folder_path.name}, non ISO date: {ex}"
+                    )
+                else:
+                    self.folder_list.append(folder_path)
 
         self.target_is_btrfs: bool
 
@@ -405,8 +338,11 @@ class BlueBackup:
 
     def _log_to_file(self, text: str) -> None:
         if not self.dry_run:
-            with self.proc.open(self.log_file, mode="ab") as log_file:
-                log_file.write(f"{text}\n".encode())
+            try:
+                with self.proc.open(self.log_file, mode="ab") as log_file:
+                    log_file.write(f"{text}\n".encode())
+            except OSError as ex:
+                raise BlueError(f"Error writing to '{self.log_file}': {ex}") from ex
 
     def _print_output(self, text: str, *, log_to_file: bool = True) -> None:
         Logger.OUTPUT.print(text, self._indent)
@@ -620,7 +556,7 @@ def main(*args: str) -> None:
     """Backup main entry-point."""
     try:
         backup = BlueBackup.from_command_line_arguments(*args)
-        with PIDFile(backup.toml_config + ".pid"):
+        with lock_file(backup.toml_config):
             backup.backup()
             backup.purge(keep=20)
             backup.disk_space()

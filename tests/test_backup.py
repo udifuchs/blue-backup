@@ -177,6 +177,7 @@ def subtest_iso_date_folders(
             in captured.err
         )
 
+
 @contextlib.contextmanager
 def btrfs_mount_point(
     path: pathlib.Path, *, test_already_mounted: bool = False
@@ -289,6 +290,7 @@ def test_btrfs(
         # Run the local test in the btrfs:
         test_local(mount_point, capsys, toml_config, short_test=short_test)
 
+        (mount_point / "data-to-backup" / "new-file.txt").touch()
         # Fill up the btrfs with zeros:
         proc = subprocess.run(
             ["/usr/bin/cp", "/dev/zero", str(mount_point / "zero")],
@@ -301,16 +303,31 @@ def test_btrfs(
             "No space left on device\n"
         )
         toml_filename = str(mount_point / toml_config)
-        # Test blue-backup failure with full device:
-        with pytest.raises(
-            OSError, match=rf"\[Errno 28\] No space left on device: '{mount_point}.*'"
-        ):
-            blue_backup.main(toml_filename)
+        # Test blue-backup failure with full device.
+        with pytest.raises(SystemExit, match="1"):
+            while True:  # Keep going until it fails to write to the log file.
+                blue_backup.main(toml_filename)
+                captured = capsys.readouterr()
+                # Even if writing to log file succeeds, rsync has a non-fatal error:
+                assert "No space left on device (28)" in captured.err
+                assert (
+                    "rsync error: some files/attrs were not transferred" in captured.err
+                )
+                assert "Return code: 23" in captured.err
+        captured = capsys.readouterr()
+        assert re.search(  # Error on writing to local log:
+            r"Error writing to '(.)*/target/(.)*\.log': "
+            r"\[Errno 28\] No space left on device",
+            captured.err
+        ) is not None or re.search(  # Error on writing to remote log:
+            r"Error writing to '(.)*/target/(.)*\.log': Failure", captured.err
+        ) is not None
 
 
 # Remote tests use local address 127.0.0.1. Therefore, these tests will fail
 # to catch bugs of mixing between local and remote location.
 # Before running the test it is recommended to: ssh-copy-id 127.0.0.1
+
 
 def test_remote_target(
     tmp_path: pathlib.Path,
@@ -370,13 +387,41 @@ def test_process_class(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(FileNotFoundError) as exc_info:
         proc.open(pathlib.Path("/no-such-file"), "rb")
-    assert (
-        str(exc_info.value) == "[Errno 2] No such file or directory: '/no-such-file'"
-    )
+    assert str(exc_info.value) == "[Errno 2] No such file or directory: '/no-such-file'"
 
     proc = blue_backup.Process(address="127.0.0.1")
     with pytest.raises(FileNotFoundError) as exc_info:
         proc.open(pathlib.Path("/no-such-file"), "rb")
-    assert (
-        str(exc_info.value) == "[Errno 2] No such file"
-    )
+    assert str(exc_info.value) == "[Errno 2] No such file"
+
+
+def test_lock_file(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Test the lock_file context manager."""
+    lock_file = tmp_path / "test.lock"
+    lock_file.touch()
+    # Simple successful lock file:
+    with blue_backup.lock_file(lock_file):
+        pass
+
+    # Fail locking the same lock file twice:
+    with blue_backup.lock_file(lock_file):
+        with \
+            pytest.raises(blue_backup.BlueError) as block_exc, \
+            blue_backup.lock_file(lock_file):
+            pass
+        assert (
+            str(block_exc.value) ==
+            f"Failed locking {lock_file}: [Errno 11] Resource temporarily unavailable"
+        )
+
+    # Fail if we have no access to the lock file:
+    lock_file_mode = lock_file.stat().st_mode
+    lock_file.chmod(0)
+    with \
+        pytest.raises(PermissionError) as exc_info, \
+        blue_backup.lock_file(lock_file):
+            pass
+    assert str(exc_info.value) == f"[Errno 13] Permission denied: '{lock_file}'"
+    lock_file.chmod(lock_file_mode)

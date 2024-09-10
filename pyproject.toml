@@ -35,6 +35,7 @@ pydocstyle.convention = "google"
 [tool.ruff.lint.per-file-ignores]
 "tests/*.py" = [
     "INP001",  # File `...` is part of an implicit namespace package. Add an `__init__.py`.
+    "PT012",  # `pytest.raises()` block should contain a single simple statement
     "S101",  # Use of 'assert' detected
 ]
 
