@@ -183,13 +183,21 @@ class BackupFolder:
         else:
             source_address, source_folder = None, source_location
         source_path = pathlib.Path(source_folder)
+        if "TOML_FOLDER" not in str(source_path) and not source_path.is_absolute():
+            raise BlueError(
+                f"Source location '{source_path}' must be absolute path."
+            )
 
         if not isinstance(folder_info, dict):
             raise BlueError(f"Folder info for '{source_location}' must be a table.")
         if "target" in folder_info:
             target_path = pathlib.Path(folder_info.pop("target"))
         else:
-            stripped_source_path = str(source_path).format(TOML_FOLDER="")
+            if source_folder == "{TOML_FOLDER}":
+                raise BlueError(
+                    f"Source location '{source_folder}' requires target path."
+                )
+            stripped_source_path = source_folder.format(TOML_FOLDER="")
             target_path = pathlib.Path(stripped_source_path).relative_to("/")
         exclude = tuple(folder_info.pop("exclude")) if "exclude" in folder_info else ()
         for key in folder_info:
@@ -237,6 +245,8 @@ class Config:
         if ":" in target_location:
             target_address, target_location = target_location.split(":", 2)
         target_path = pathlib.Path(target_location)
+        if "TOML_FOLDER" not in str(target_path) and not target_path.is_absolute():
+            raise BlueError(f"Target location '{target_path}' must be absolute path.")
 
         if isinstance(backup_folders, dict):
             backup_folders_conf = tuple(
@@ -258,18 +268,6 @@ class Config:
             bf.source_path = pathlib.Path(str(bf.source_path).format(**kwargs))
             bf.target_path = pathlib.Path(str(bf.target_path).format(**kwargs))
 
-    def check_all_paths_absolute(self) -> None:
-        """Make sure that all paths in configuration are absolute."""
-        if not self.target_path.is_absolute():
-            raise BlueError(
-                f"Target location '{self.target_path}' must be absolute path."
-            )
-        for bf in self.backup_folders:
-            if not bf.source_path.is_absolute():
-                raise BlueError(
-                    f"Source location '{bf.source_path}' must be absolute path."
-                )
-
     def get_target_location(self) -> str:
         """Get target location."""
         if self.target_address is None:
@@ -290,7 +288,6 @@ class BlueBackup:
 
     def __post_init__(self) -> None:
         """Prepare for backup."""
-        self.config.check_all_paths_absolute()
         self.proc = Process(self.config.target_address)
         today = datetime.date.today()
         self.today_folder = self.config.target_path / str(today)

@@ -425,3 +425,124 @@ def test_lock_file(
             pass
     assert str(exc_info.value) == f"[Errno 13] Permission denied: '{lock_file}'"
     lock_file.chmod(lock_file_mode)
+
+
+def test_configuration(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test handling of basic configuration file features."""
+    toml_file = tmp_path / "blue.toml"
+
+    # TOML file with unknown fields works, just reports warnings:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='{TOML_FOLDER}'\n"
+            "no-such-field=3\n"
+            "[backup-folders]\n"
+            "'{TOML_FOLDER}'={target='target', not-this-either=3}\n"
+        )
+    blue_backup.main(str(toml_file), "--first-time")
+    captured = capsys.readouterr()
+    assert (
+        captured.err ==
+        f"Unknown field in '{toml_file}': 'no-such-field'\n"
+        "Unknown field for '{TOML_FOLDER}': 'not-this-either'\n"
+    )
+
+    # When a subfolder is specified for the source, there is no need to specify target:
+    (tmp_path / "backup-source").mkdir()
+    (tmp_path / "backup-target").mkdir()
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='{TOML_FOLDER}/backup-target'\n"
+            "[backup-folders]\n"
+            "'{TOML_FOLDER}/backup-source'={}\n"
+        )
+    blue_backup.main(str(toml_file), "--first-time")
+    captured = capsys.readouterr()
+    assert captured.err == ""
+
+
+def test_configuration_errors(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test handling of configuration errors."""
+    toml_file = tmp_path / "blue.toml"
+
+    # Empty TOML file has missing fields:
+    toml_file.touch()
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert captured.err == f"Missing in '{toml_file}': 'target-location'\n"
+
+    # backup-folders not a table:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='{TOML_FOLDER}'\n"
+            "backup-folders=3\n"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert captured.err == "'backup-folders' must be a table.\n"
+
+    # Backup folder info not a table:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='{TOML_FOLDER}'\n"
+            "[backup-folders]\n"
+            "'/to_backup'=3\n"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert captured.err == "Folder info for '/to_backup' must be a table.\n"
+
+    # Target location not absolute path:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='.'\n"
+            "[backup-folders]\n"
+            "'{TOML_FOLDER}'={target='target'}\n"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert captured.err == "Target location '.' must be absolute path.\n"
+
+    # Source location not absolute path:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='{TOML_FOLDER}'\n"
+            "[backup-folders]\n"
+            "'bla-bla-bla'={}\n"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert captured.err == "Source location 'bla-bla-bla' must be absolute path.\n"
+
+    # Source location {TOML_FOLDER} requires a target:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='{TOML_FOLDER}'\n"
+            "[backup-folders]\n"
+            "'{TOML_FOLDER}'={}\n"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert captured.err == "Source location '{TOML_FOLDER}' requires target path.\n"
+
+   # Missing permissions to TOML file:
+    toml_file.chmod(0)
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert (
+        captured.err ==
+        f"Failed to read '{toml_file}': [Errno 13] Permission denied: '{toml_file}'\n"
+    )
