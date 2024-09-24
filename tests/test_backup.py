@@ -513,6 +513,23 @@ def test_configuration_errors(
     captured = capsys.readouterr()
     assert captured.err == "Target location '.' must be absolute path.\n"
 
+    # Target location unknown address:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='256.256.256.256:/'\n"
+            "[backup-folders]\n"
+            "'{TOML_FOLDER}'={target='target'}\n"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert captured.out == "Backup: 256.256.256.256:/1999-12-25\n"
+    assert (
+        captured.err ==
+        "Error writing to target location '256.256.256.256:/': "
+        "Failed connecting to 256.256.256.256: [Errno -2] Name or service not known\n"
+    )
+
     # Source location not absolute path:
     with toml_file.open("w") as tfile:
         tfile.write(

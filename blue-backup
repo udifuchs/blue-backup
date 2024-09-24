@@ -120,10 +120,6 @@ class Process:
                 del password
             self.sftp = self.ssh.open_sftp()
 
-    def get_full_path(self, local_path: pathlib.Path | str) -> str:
-        """Return full path including host address in remote mode."""
-        return str(local_path) if self.ssh is None else f"{self.address}:{local_path}"
-
     def iterdir_attr(self, path: pathlib.Path) -> Iterator[paramiko.SFTPAttributes]:
         """Yield SFTPAttributes objects of the folder content."""
         if self.sftp is None:
@@ -268,6 +264,12 @@ class Config:
             bf.source_path = pathlib.Path(str(bf.source_path).format(**kwargs))
             bf.target_path = pathlib.Path(str(bf.target_path).format(**kwargs))
 
+    def get_full_path(self, local_path: pathlib.Path | str) -> str:
+        """Return full path including host address in remote mode."""
+        return (
+            str(local_path) if self.target_address is None else
+            f"{self.target_address}:{local_path}"
+        )
     def get_target_location(self) -> str:
         """Get target location."""
         if self.target_address is None:
@@ -288,13 +290,15 @@ class BlueBackup:
 
     def __post_init__(self) -> None:
         """Prepare for backup."""
-        self.proc = Process(self.config.target_address)
+        self._proc: Process | None = None
         today = datetime.date.today()
         self.today_folder = self.config.target_path / str(today)
         self.log_file = self.today_folder.with_suffix(".log")
         self._indent = ""
         try:
-            self._print_output(f"Backup: {self.proc.get_full_path(self.today_folder)}")
+            self._print_output(
+                f"Backup: {self.config.get_full_path(self.today_folder)}"
+            )
         except BlueError as ex:
             raise BlueError(
                 "Error writing to target location "
@@ -332,6 +336,13 @@ class BlueBackup:
             filter_output=check_stat_output, log_command=False
         )
         self.dry_run = save_dry_run
+
+    @property
+    def proc(self) -> Process:
+        """Return active Process."""
+        if self._proc is None:
+            self._proc = Process(self.config.target_address)
+        return self._proc
 
     def _log_to_file(self, text: str) -> None:
         if not self.dry_run:
@@ -484,7 +495,7 @@ class BlueBackup:
             backup_target_str = str(
                 self.today_folder / backup_folder.target_path / "_"
             )[:-1]
-            backup_target_str = self.proc.get_full_path(backup_target_str)
+            backup_target_str = self.config.get_full_path(backup_target_str)
             try:
                 self._run(
                     *rsync_command,
