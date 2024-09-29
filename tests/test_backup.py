@@ -320,7 +320,7 @@ def test_btrfs(
             r"\[Errno 28\] No space left on device",
             captured.err
         ) is not None or re.search(  # Error on writing to remote log:
-            r"Error writing to '(.)*/target/(.)*\.log': Failure", captured.err
+            r"Error writing to '127.0.0.1:(.)*/target/(.)*\.log': Failure", captured.err
         ) is not None
 
 

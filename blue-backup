@@ -349,8 +349,9 @@ class BlueBackup:
             try:
                 with self.proc.open(self.log_file, mode="ab") as log_file:
                     log_file.write(f"{text}\n".encode())
-            except OSError as ex:
-                raise BlueError(f"Error writing to '{self.log_file}': {ex}") from ex
+            except (OSError, paramiko.ssh_exception.SSHException) as ex:
+                log_full_path = self.config.get_full_path(self.log_file)
+                raise BlueError(f"Error writing to '{log_full_path}': {ex}") from ex
 
     def _print_output(self, text: str, *, log_to_file: bool = True) -> None:
         Logger.OUTPUT.print(text, self._indent)
