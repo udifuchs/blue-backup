@@ -195,10 +195,14 @@ class BackupFolder:
                 )
             stripped_source_path = source_folder.format(TOML_FOLDER="")
             target_path = pathlib.Path(stripped_source_path).relative_to("/")
-        exclude = tuple(folder_info.pop("exclude")) if "exclude" in folder_info else ()
+
+        exclude: list[str] = folder_info.pop("exclude", [])
+        if not isinstance(exclude, list):
+            raise BlueError(f"'exclude' for '{source_folder}' must be an array.")
+
         for key in folder_info:
             Logger.WARNING.print(f"Unknown field for '{source_location}': '{key}'")
-        return cls(source_address, source_path, target_path, exclude)
+        return cls(source_address, source_path, target_path, tuple(exclude))
 
     def get_source_location(self) -> str:
         """Get source location formatted for the rsync command."""
@@ -217,6 +221,7 @@ class Config:
     target_path: pathlib.Path
     backup_folders: tuple[BackupFolder, ...]
     exclude: tuple[str, ...] = ()
+    rsync_options: tuple[str, ...] = ()
 
     @classmethod
     def from_toml(cls, filename: str) -> Self:
@@ -230,9 +235,10 @@ class Config:
         try:
             target_location: str = toml_dict.pop("target-location")
             backup_folders: dict[str, FolderInfo] = toml_dict.pop("backup-folders")
-            exclude: list[str] = toml_dict.pop("exclude", [])
         except KeyError as ex:
             raise BlueError(f"Missing in '{filename}': {ex}") from ex
+        exclude: list[str] = toml_dict.pop("exclude", [])
+        rsync_options: list[str] = toml_dict.pop("rsync-options", [])
         for key in toml_dict:
             Logger.WARNING.print(f"Unknown field in '{filename}': '{key}'")
 
@@ -252,7 +258,16 @@ class Config:
         else:
             raise BlueError("'backup-folders' must be a table.")
 
-        config = cls(target_address, target_path, backup_folders_conf, tuple(exclude))
+        if not isinstance(exclude, list):
+            raise BlueError("Global 'exclude' must be an array.")
+
+        if not isinstance(rsync_options, list):
+            raise BlueError("'rsync-options' must be an array.")
+
+        config = cls(
+            target_address, target_path, backup_folders_conf,
+            tuple(exclude), tuple(rsync_options),
+        )
         toml_folder_path = pathlib.Path(filename).resolve().parent
         config.apply_var(TOML_FOLDER=str(toml_folder_path))
         return config
@@ -285,7 +300,6 @@ class BlueBackup:
     toml_config: str
     first_time: bool = False
     dry_run: bool = False
-    checksum: bool = False
     verbose: bool = False
 
     def __post_init__(self) -> None:
@@ -479,14 +493,13 @@ class BlueBackup:
             "--delete", "--delete-excluded",
             # Create all missing path components of the destination path:
             "--mkpath",
+            *self.config.rsync_options
         ]
         if self.proc.ssh is None:
             rsync_command.append(f"--log-file={self.log_file}")
         else:
             # Log to file on the remote (receiver) side:
             rsync_command.append(f"--remote-option=--log-file={self.log_file}")
-        if self.checksum:
-            rsync_command.append("--checksum")
 
         for backup_folder in self.config.backup_folders:
             if not self.verbose:
@@ -556,7 +569,6 @@ class BlueBackup:
         parser.add_argument("toml_config", nargs="?", default="blue-backup.toml")
         parser.add_argument("--first-time", action="store_true")
         parser.add_argument("--dry-run", action="store_true")
-        parser.add_argument("--checksum", action="store_true")
         parser.add_argument("--verbose", action="store_true")
         args_namespace = parser.parse_args(args)
 

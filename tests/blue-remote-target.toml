@@ -1,5 +1,7 @@
 target-location = "127.0.0.1:{TOML_FOLDER}/target"
 
+rsync-options = ["--numeric-ids", "--checksum"]
+
 exclude = ["cache", ".cache", "__pycache__"]
 
 [backup-folders]

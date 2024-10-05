@@ -474,11 +474,11 @@ def test_configuration(
     assert captured.err == ""
 
 
-def test_configuration_errors(
+def test_configuration_scheme_errors(
     tmp_path: pathlib.Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Test handling of configuration errors."""
+    """Test handling of errors in the scheme of the TOML configuration file."""
     toml_file = tmp_path / "blue.toml"
 
     # Empty TOML file has missing fields:
@@ -499,6 +499,42 @@ def test_configuration_errors(
     captured = capsys.readouterr()
     assert captured.err == "'backup-folders' must be a table.\n"
 
+    # Global exclude not an array:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='{TOML_FOLDER}'\n"
+            "exclude='exclude-me'\n"
+            "[backup-folders]\n"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert captured.err == "Global 'exclude' must be an array.\n"
+
+    # Source folder exclude not an array:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='{TOML_FOLDER}'\n"
+            "[backup-folders]\n"
+            "'/my-folder'={exclude='exclude-me'}\n"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert captured.err == "'exclude' for '/my-folder' must be an array.\n"
+
+    # rsync-options not an array:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='{TOML_FOLDER}'\n"
+            "rsync-options='--my-rsync-option'\n"
+            "[backup-folders]\n"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert captured.err == "'rsync-options' must be an array.\n"
+
     # Backup folder info not a table:
     with toml_file.open("w") as tfile:
         tfile.write(
@@ -510,6 +546,14 @@ def test_configuration_errors(
         blue_backup.main(str(toml_file))
     captured = capsys.readouterr()
     assert captured.err == "Folder info for '/to_backup' must be a table.\n"
+
+
+def test_configuration_errors(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test handling of configuration errors."""
+    toml_file = tmp_path / "blue.toml"
 
     # Target location not absolute path:
     with toml_file.open("w") as tfile:
