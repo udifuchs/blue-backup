@@ -286,7 +286,7 @@ class BlueBackup:
     first_time: bool = False
     dry_run: bool = False
     checksum: bool = False
-    log_summary: bool = False
+    verbose: bool = False
 
     def __post_init__(self) -> None:
         """Prepare for backup."""
@@ -297,14 +297,14 @@ class BlueBackup:
         self._indent = ""
         try:
             self._print_output(
-                f"Backup: {self.config.get_full_path(self.today_folder)}"
+                f"Backup target: {self.config.get_full_path(self.today_folder)}"
             )
         except BlueError as ex:
             raise BlueError(
                 "Error writing to target location "
                 f"'{self.config.get_target_location()}': {ex}"
             ) from ex
-        if self.log_summary:
+        if not self.verbose:  # In verbose mode we do not want indent before commands.
             self._indent = "    "
 
         self.folder_list: list[pathlib.Path] = []
@@ -353,14 +353,13 @@ class BlueBackup:
                 log_full_path = self.config.get_full_path(self.log_file)
                 raise BlueError(f"Error writing to '{log_full_path}': {ex}") from ex
 
-    def _print_output(self, text: str, *, log_to_file: bool = True) -> None:
+    def _print_output(self, text: str) -> None:
         Logger.OUTPUT.print(text, self._indent)
-        if log_to_file:
-            self._log_to_file(text)
+        self._log_to_file(text)
 
     def _print_command(self, text: str) -> None:
-        if not self.log_summary:
-            # Do not print commands in summary mode.
+        if self.verbose:
+            # Print commands in verbose mode.
             Logger.COMMAND.print(text, self._indent)
         self._log_to_file(f"\n{text}")
 
@@ -426,7 +425,7 @@ class BlueBackup:
                 "Total transferred file size:",
             ))
         ]
-        self._print_output(" / ".join(out_lines), log_to_file=False)
+        self._print_output(" / ".join(out_lines))
 
     def create_backup_folder(self) -> None:
         """Prepare a new folder for today's backup."""
@@ -462,7 +461,11 @@ class BlueBackup:
                     last_folder, self.today_folder
                 )
             else:
-                # Create snapshot using hard links.
+                # Show a similar message to the one 'btrfs snapshot' shows:
+                self._print_output(
+                    f"Create a copy of '{last_folder}' in '{self.today_folder}'"
+                )
+                # Create a copy using hard links.
                 self._run("/usr/bin/cp", "-al", last_folder, self.today_folder)
             self.folder_list.append(self.today_folder)
 
@@ -486,10 +489,10 @@ class BlueBackup:
             rsync_command.append("--checksum")
 
         for backup_folder in self.config.backup_folders:
-            if self.log_summary:
+            if not self.verbose:
                 # Full rsync command is not printed. Print short summary instead:
                 self._print_output(
-                    f"rsync {backup_folder.get_source_location()}", log_to_file=False
+                    f"Backup source: {backup_folder.get_source_location()}"
                 )
             # str(path / "_")[:-1] is to ensure that path ends with a "/".
             source_folder_str = backup_folder.get_source_location()
@@ -554,7 +557,7 @@ class BlueBackup:
         parser.add_argument("--first-time", action="store_true")
         parser.add_argument("--dry-run", action="store_true")
         parser.add_argument("--checksum", action="store_true")
-        parser.add_argument("--log-summary", action="store_true")
+        parser.add_argument("--verbose", action="store_true")
         args_namespace = parser.parse_args(args)
 
         config = Config.from_toml(args_namespace.toml_config)

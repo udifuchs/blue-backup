@@ -88,6 +88,14 @@ def test_local(
     blue_backup.main("--first-time", toml_filename)
     captured = capsys.readouterr()
     assert captured.err == ""
+    assert (
+        f"Backup target: {tmp_path}/target/" in captured.out or
+        f"Backup target: 127.0.0.1:{tmp_path}/target/" in captured.out
+    )
+    assert (
+        f"Backup source: {tmp_path}/data-to-backup/" in captured.out or
+        f"Backup source: 127.0.0.1:{tmp_path}/data-to-backup/" in captured.out
+    )
     assert "Kept monthly backups: 1" in captured.out
     assert "Kept daily backups: 0" in captured.out
     assert captured.err == ""
@@ -110,14 +118,16 @@ def test_local(
         "This is not the first time you are backing up to this folder, "
         "remove --first-time\n"
     )
+    assert "/usr/bin/rsync" not in captured.out
 
-    # Second run that should succeed. Also test --log-summary:
-    blue_backup.main(toml_filename, "--log-summary")
+    # Second run that should succeed. Also test --verbose:
+    blue_backup.main(toml_filename, "--verbose")
     captured = capsys.readouterr()
     assert (
-        captured.out.startswith(f"Backup: {target_path}/{today}") or
-        captured.out.startswith(f"Backup: 127.0.0.1:{target_path}/{today}")
+        captured.out.startswith(f"Backup target: {target_path}/{today}") or
+        captured.out.startswith(f"Backup target: 127.0.0.1:{target_path}/{today}")
     )
+    assert "/usr/bin/rsync" in captured.out
     assert "Kept monthly backups: 1" in captured.out
     assert "Kept daily backups: 0" in captured.out
     assert captured.err == ""
@@ -135,7 +145,7 @@ def subtest_multi_dates_backup(
     for i in range(1, 23):
         next_date = FakeDate.today() + datetime.timedelta(days=1)
         FakeDate.fake_today = next_date.timetuple()[:3]
-        blue_backup.main(toml_filename, "--log-summary")
+        blue_backup.main(toml_filename)
         captured = capsys.readouterr()
         monthly_backups = 1 if FIRST_FAKE_DATE[0] in FakeDate.fake_today else 2
         assert f"Kept monthly backups: {monthly_backups}" in captured.out
@@ -523,7 +533,7 @@ def test_configuration_errors(
     with pytest.raises(SystemExit, match="1"):
         blue_backup.main(str(toml_file))
     captured = capsys.readouterr()
-    assert captured.out == "Backup: 256.256.256.256:/1999-12-25\n"
+    assert captured.out == "Backup target: 256.256.256.256:/1999-12-25\n"
     assert (
         captured.err ==
         "Error writing to target location '256.256.256.256:/': "
