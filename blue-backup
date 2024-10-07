@@ -33,6 +33,9 @@ else:
 
 import paramiko
 
+RSYNC_TIMEOUT = 60  # rsync maximum I/O timeout in seconds.
+DAILY_KEEP = 20  # Number of daily backups to keep during purge.
+
 if sys.version_info >= (3, 10):
     OpenBinaryMode: TypeAlias = Literal["rb", "wb", "ab"]
 else:
@@ -491,6 +494,7 @@ class BlueBackup:
             "/usr/bin/rsync", "--archive", "--human-readable", "--info=stats2",
             # Remove files that do not exist anymore:
             "--delete", "--delete-excluded",
+            f"--timeout={RSYNC_TIMEOUT}",
             # Create all missing path components of the destination path:
             "--mkpath",
             *self.config.rsync_options
@@ -531,7 +535,7 @@ class BlueBackup:
         # Commit filesystem caches to disk:
         self._run("/usr/bin/sync", self.today_folder)
 
-    def purge(self, *, keep: int) -> None:
+    def purge(self, *, daily_keep: int) -> None:
         """Purge old backups."""
         folder_list = sorted(self.folder_list)
         months = {folder.name[:7] for folder in self.folder_list}
@@ -544,7 +548,7 @@ class BlueBackup:
                 months.remove(folder.name[:7])
         self._print_output(f"Kept monthly backups: {monthly_backups}")
 
-        while len(folder_list) > keep:
+        while len(folder_list) > daily_keep:
             try:
                 if self.target_is_btrfs:
                     self._run("/usr/bin/btrfs", "subvolume", "delete", folder_list[0])
@@ -582,7 +586,7 @@ def main(*args: str) -> None:
         backup = BlueBackup.from_command_line_arguments(*args)
         with lock_file(backup.toml_config):
             backup.backup()
-            backup.purge(keep=20)
+            backup.purge(daily_keep=DAILY_KEEP)
             backup.disk_space()
     except BlueError as ex:
         Logger.ERROR.print(str(ex))

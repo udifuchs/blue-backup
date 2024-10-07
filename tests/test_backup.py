@@ -617,3 +617,29 @@ def test_configuration_errors(
         captured.err ==
         f"Failed to read '{toml_file}': [Errno 13] Permission denied: '{toml_file}'\n"
     )
+
+
+def test_rsync_timeout(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test timeout during rsync."""
+    toml_file = tmp_path / "blue.toml"
+
+    save_rsync_timeout = blue_backup.RSYNC_TIMEOUT
+    try:
+        blue_backup.RSYNC_TIMEOUT = 1  # type: ignore[attr-defined]
+        with toml_file.open("w") as tfile:
+            tfile.write(
+                "target-location='127.0.0.1:{TOML_FOLDER}'\n"
+                "rsync-options=['--rsh', 'ssh 127.0.0.1 sleep 20;']\n"
+                "[backup-folders]\n"
+                "'{TOML_FOLDER}'={target='target'}\n"
+            )
+        blue_backup.main(str(toml_file), "--first-time")
+        captured = capsys.readouterr()
+        assert "    [sender] io timeout after 1 seconds -- exiting" in captured.err
+        assert "    rsync error: timeout in data send/receive (code 30)" in captured.err
+        assert "    Return code: 30" in captured.err
+    finally:
+        blue_backup.RSYNC_TIMEOUT = save_rsync_timeout  # type: ignore[attr-defined]
