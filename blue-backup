@@ -67,7 +67,8 @@ class Logger(enum.Enum):
         stream = sys.stderr if self in {Logger.ERROR, Logger.WARNING} else sys.stdout
         for line in text.split("\n"):
             if stream.isatty():
-                stream.write(f"{indent}{self.value}{line}{Logger._RESET.value}\n")
+                # When separating by color, there is no need to separate with indent.
+                stream.write(f"{self.value}{line}{Logger._RESET.value}\n")
             else:
                 stream.write(f"{indent}{line}\n")
         # Flushing is needed when invoked using: ssh hostname ./blue-backup
@@ -311,7 +312,12 @@ class BlueBackup:
         today = datetime.date.today()
         self.today_folder = self.config.target_path / str(today)
         self.log_file = self.today_folder.with_suffix(".log")
-        self._indent = ""
+        self.indent = ""
+        self.folder_list: list[pathlib.Path] = []
+        self.target_is_btrfs: bool
+
+    def init(self) -> None:
+        """Initialize the backup."""
         try:
             self._print_output(
                 f"Backup target: {self.config.get_full_path(self.today_folder)}"
@@ -321,10 +327,9 @@ class BlueBackup:
                 "Error writing to target location "
                 f"'{self.config.get_target_location()}': {ex}"
             ) from ex
-        if not self.verbose:  # In verbose mode we do not want indent before commands.
-            self._indent = "    "
+        finally:
+            self.indent = "    "
 
-        self.folder_list: list[pathlib.Path] = []
         for path_attr in self.proc.iterdir_attr(self.config.target_path):
             if path_attr.st_mode is not None and stat.S_ISDIR(path_attr.st_mode):
                 folder_path = self.config.target_path / path_attr.filename
@@ -339,8 +344,6 @@ class BlueBackup:
                     )
                 else:
                     self.folder_list.append(folder_path)
-
-        self.target_is_btrfs: bool
 
         def check_stat_output(output: bytes) -> None:
             """Callback for checking target file system type."""
@@ -371,21 +374,21 @@ class BlueBackup:
                 raise BlueError(f"Error writing to '{log_full_path}': {ex}") from ex
 
     def _print_output(self, text: str) -> None:
-        Logger.OUTPUT.print(text, self._indent)
+        Logger.OUTPUT.print(text, self.indent)
         self._log_to_file(text)
 
     def _print_command(self, text: str) -> None:
         if self.verbose:
             # Print commands in verbose mode.
-            Logger.COMMAND.print(text, self._indent)
+            Logger.COMMAND.print(text, self.indent)
         self._log_to_file(f"\n{text}")
 
     def _print_warning(self, text: str) -> None:
-        Logger.WARNING.print(text, self._indent)
+        Logger.WARNING.print(text, self.indent)
         self._log_to_file(f"{text}")
 
     def _print_error(self, text: str) -> None:
-        Logger.ERROR.print(text, self._indent)
+        Logger.ERROR.print(text, self.indent)
         self._log_to_file(f"{text}")
 
     def _run(
@@ -506,11 +509,7 @@ class BlueBackup:
             rsync_command.append(f"--remote-option=--log-file={self.log_file}")
 
         for backup_folder in self.config.backup_folders:
-            if not self.verbose:
-                # Full rsync command is not printed. Print short summary instead:
-                self._print_output(
-                    f"Backup source: {backup_folder.get_source_location()}"
-                )
+            self._print_output(f"Backup source: {backup_folder.get_source_location()}")
             # str(path / "_")[:-1] is to ensure that path ends with a "/".
             source_folder_str = backup_folder.get_source_location()
             backup_target_str = str(
@@ -553,6 +552,7 @@ class BlueBackup:
                 if self.target_is_btrfs:
                     self._run("/usr/bin/btrfs", "subvolume", "delete", folder_list[0])
                 else:
+                    self._print_output(f"Delete {folder_list[0]}")
                     self._run("/usr/bin/rm", "-r", folder_list[0])
                 # self._run("/usr/bin/rm", folder_list[0].with_suffix(".log"))
             except ProcessError as ex:
@@ -584,12 +584,17 @@ def main(*args: str) -> None:
     """Backup main entry-point."""
     try:
         backup = BlueBackup.from_command_line_arguments(*args)
+    except BlueError as ex:
+        Logger.ERROR.print(str(ex))
+        raise SystemExit(1) from ex
+    try:
         with lock_file(backup.toml_config):
+            backup.init()
             backup.backup()
             backup.purge(daily_keep=DAILY_KEEP)
             backup.disk_space()
     except BlueError as ex:
-        Logger.ERROR.print(str(ex))
+        Logger.ERROR.print(str(ex), backup.indent)
         raise SystemExit(1) from ex
 
 

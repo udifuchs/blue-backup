@@ -65,7 +65,7 @@ def test_local(
         blue_backup.main(toml_filename)
     captured = capsys.readouterr()
     assert re.match(
-        "Error writing to target location '(.)*/target':", captured.err
+        "    Error writing to target location '(.)*/target':", captured.err
     ) is not None
 
     target_path.mkdir()
@@ -75,7 +75,7 @@ def test_local(
     captured = capsys.readouterr()
     assert (
         captured.err ==
-        "This is the first time you are backing up to this folder, "
+        "    This is the first time you are backing up to this folder, "
         "specify --first-time\n"
     )
 
@@ -111,11 +111,11 @@ def test_local(
 
     # Second backup, forget removing --first-time:
     with pytest.raises(SystemExit, match="1"):
-        blue_backup.main("--first-time", toml_filename)
+        blue_backup.main("--first-time", toml_filename, "--verbose")
     captured = capsys.readouterr()
     assert (
         captured.err ==
-        "This is not the first time you are backing up to this folder, "
+        "    This is not the first time you are backing up to this folder, "
         "remove --first-time\n"
     )
     assert "/usr/bin/rsync" not in captured.out
@@ -580,7 +580,7 @@ def test_configuration_errors(
     assert captured.out == "Backup target: 256.256.256.256:/1999-12-25\n"
     assert (
         captured.err ==
-        "Error writing to target location '256.256.256.256:/': "
+        "    Error writing to target location '256.256.256.256:/': "
         "Failed connecting to 256.256.256.256: [Errno -2] Name or service not known\n"
     )
 
