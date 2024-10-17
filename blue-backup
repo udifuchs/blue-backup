@@ -46,6 +46,16 @@ class BlueError(Exception):
     """blue-backup failed."""
 
 
+@dataclasses.dataclass
+class ProcessConnectionError(BlueError):
+    """Error connecting to remote process."""
+    hostname: str
+
+    def __str__(self) -> str:
+        """Return connection error description and cause."""
+        return f"Failed connecting to {self.hostname}: {self.__cause__}"
+
+
 class ProcessError(BlueError):
     """Error while executing external process."""
 
@@ -119,7 +129,7 @@ class Process:
                     password = getpass.getpass(f"{self.address} password:")
                     self.ssh.connect(hostname, username=username, password=password)
             except (OSError, paramiko.ssh_exception.SSHException) as ex:
-                raise BlueError(f"Failed connecting to {hostname}: {ex}") from None
+                raise ProcessConnectionError(hostname) from ex
             finally:
                 del password
             self.sftp = self.ssh.open_sftp()
@@ -509,9 +519,24 @@ class BlueBackup:
             rsync_command.append(f"--remote-option=--log-file={self.log_file}")
 
         for backup_folder in self.config.backup_folders:
-            self._print_output(f"Backup source: {backup_folder.get_source_location()}")
-            # str(path / "_")[:-1] is to ensure that path ends with a "/".
             source_folder_str = backup_folder.get_source_location()
+            self._print_output(f"Backup source: {source_folder_str}")
+            # Check that source folder is not empty or missing:
+            try:
+                source_proc = Process(backup_folder.source_address)
+            except ProcessConnectionError as ex:
+                self._print_error(str(ex))
+                continue
+            try:
+                for _path_attr in source_proc.iterdir_attr(backup_folder.source_path):
+                    break
+                else:
+                    # Empty source folder may indicate unmounted mount-point.
+                    self._print_warning("Source folder is empty.")
+            except FileNotFoundError:
+                self._print_error("Source folder is missing.")
+                continue
+            # str(path / "_")[:-1] is to ensure that path ends with a "/".
             backup_target_str = str(
                 self.today_folder / backup_folder.target_path / "_"
             )[:-1]
