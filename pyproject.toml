@@ -19,6 +19,7 @@ select = ["ALL"]
 ignore = [
     "ANN401",  # Dynamically typed expressions (typing.Any) are disallowed
     "COM812",  # Trailing comma missing
+    "D105",  # Missing docstring in magic method
     "D107",  # Missing docstring in __init__
     "DTZ011",  # `datetime.date.today()` used
     "EM101",  # Exception must not use a string literal, assign to variable first
@@ -41,6 +42,7 @@ pydocstyle.convention = "google"
 
 [tool.pylint.message_control]
 disable = [
+    # BlueBackup: Too many instance attributes (11/7)
     "too-many-instance-attributes",
     # Module name "blue-backup" doesn't conform to snake_case naming style
     "invalid-name",

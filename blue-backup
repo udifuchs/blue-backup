@@ -52,7 +52,6 @@ class ProcessConnectionError(BlueError):
     hostname: str
 
     def __str__(self) -> str:
-        """Return connection error description and cause."""
         return f"Failed connecting to {self.hostname}: {self.__cause__}"
 
 
@@ -108,7 +107,6 @@ class Process:
     """
 
     def __init__(self, address: str | None) -> None:
-        """Initialize process for remote or local host."""
         hostname: str | None
         if address is not None and "@" in address:
             username, hostname = address.split("@", 2)
@@ -194,9 +192,7 @@ class BackupFolder:
             source_address, source_folder = None, source_location
         source_path = pathlib.Path(source_folder)
         if "TOML_FOLDER" not in str(source_path) and not source_path.is_absolute():
-            raise BlueError(
-                f"Source location '{source_path}' must be absolute path."
-            )
+            raise BlueError(f"Source location '{source_path}' must be absolute path.")
 
         if not isinstance(folder_info, dict):
             raise BlueError(f"Folder info for '{source_location}' must be a table.")
@@ -317,7 +313,6 @@ class BlueBackup:
     verbose: bool = False
 
     def __post_init__(self) -> None:
-        """Prepare for backup."""
         self._proc: Process | None = None
         today = datetime.date.today()
         self.today_folder = self.config.target_path / str(today)
@@ -607,19 +602,16 @@ class BlueBackup:
 
 def main(*args: str) -> None:
     """Backup main entry-point."""
+    backup: BlueBackup | None = None
     try:
         backup = BlueBackup.from_command_line_arguments(*args)
-    except BlueError as ex:
-        Logger.ERROR.print(str(ex))
-        raise SystemExit(1) from ex
-    try:
         with lock_file(backup.toml_config):
             backup.init()
             backup.backup()
             backup.purge(daily_keep=DAILY_KEEP)
             backup.disk_space()
     except BlueError as ex:
-        Logger.ERROR.print(str(ex), backup.indent)
+        Logger.ERROR.print(str(ex), backup.indent if backup is not None else "")
         raise SystemExit(1) from ex
 
 

@@ -178,9 +178,7 @@ def subtest_iso_date_folders(
     blue_backup.main(toml_filename)
     captured = capsys.readouterr()
     if sys.version_info >= (3, 11):
-        assert (
-            "Folder 20191204, non ISO date: 20191204 != 2019-12-04" in captured.err
-        )
+        assert "Folder 20191204, non ISO date: 20191204 != 2019-12-04" in captured.err
     else:
         assert (
             "Folder 20191204, non ISO date: Invalid isoformat string: '20191204'"
