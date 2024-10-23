@@ -459,7 +459,7 @@ def test_configuration(
     # TOML file with unknown fields works, just reports warnings:
     with toml_file.open("w") as tfile:
         tfile.write(
-            "target-location='{TOML_FOLDER}'\n"
+            "target-location='{TOML_FOLDER}/{TODAY}'\n"
             "no-such-field=3\n"
             "[backup-folders]\n"
             "'{TOML_FOLDER}'={target='target', not-this-either=3}\n"
@@ -478,7 +478,7 @@ def test_configuration(
     (tmp_path / "backup-target").mkdir()
     with toml_file.open("w") as tfile:
         tfile.write(
-            "target-location='{TOML_FOLDER}/backup-target'\n"
+            "target-location='{TOML_FOLDER}/backup-target/{TODAY}'\n"
             "[backup-folders]\n"
             "'{TOML_FOLDER}/backup-source'={}\n"
         )
@@ -504,7 +504,7 @@ def test_configuration_scheme_errors(
     # backup-folders not a table:
     with toml_file.open("w") as tfile:
         tfile.write(
-            "target-location='{TOML_FOLDER}'\n"
+            "target-location='{TOML_FOLDER}/{TODAY}'\n"
             "backup-folders=3\n"
         )
     with pytest.raises(SystemExit, match="1"):
@@ -515,7 +515,7 @@ def test_configuration_scheme_errors(
     # Global exclude not an array:
     with toml_file.open("w") as tfile:
         tfile.write(
-            "target-location='{TOML_FOLDER}'\n"
+            "target-location='{TOML_FOLDER}/{TODAY}'\n"
             "exclude='exclude-me'\n"
             "[backup-folders]\n"
         )
@@ -527,7 +527,7 @@ def test_configuration_scheme_errors(
     # Source folder exclude not an array:
     with toml_file.open("w") as tfile:
         tfile.write(
-            "target-location='{TOML_FOLDER}'\n"
+            "target-location='{TOML_FOLDER}/{TODAY}'\n"
             "[backup-folders]\n"
             "'/my-folder'={exclude='exclude-me'}\n"
         )
@@ -539,7 +539,7 @@ def test_configuration_scheme_errors(
     # rsync-options not an array:
     with toml_file.open("w") as tfile:
         tfile.write(
-            "target-location='{TOML_FOLDER}'\n"
+            "target-location='{TOML_FOLDER}/{TODAY}'\n"
             "rsync-options='--my-rsync-option'\n"
             "[backup-folders]\n"
         )
@@ -551,7 +551,7 @@ def test_configuration_scheme_errors(
     # Backup folder info not a table:
     with toml_file.open("w") as tfile:
         tfile.write(
-            "target-location='{TOML_FOLDER}'\n"
+            "target-location='{TOML_FOLDER}/{TODAY}'\n"
             "[backup-folders]\n"
             "'/to_backup'=3\n"
         )
@@ -583,7 +583,7 @@ def test_configuration_errors(
     # Target location unknown address:
     with toml_file.open("w") as tfile:
         tfile.write(
-            "target-location='256.256.256.256:/'\n"
+            "target-location='256.256.256.256:/{TODAY}'\n"
             "[backup-folders]\n"
             "'{TOML_FOLDER}'={target='target'}\n"
         )
@@ -600,7 +600,7 @@ def test_configuration_errors(
     # Source location not absolute path:
     with toml_file.open("w") as tfile:
         tfile.write(
-            "target-location='{TOML_FOLDER}'\n"
+            "target-location='{TOML_FOLDER}/{TODAY}'\n"
             "[backup-folders]\n"
             "'bla-bla-bla'={}\n"
         )
@@ -612,7 +612,7 @@ def test_configuration_errors(
     # Source location {TOML_FOLDER} requires a target:
     with toml_file.open("w") as tfile:
         tfile.write(
-            "target-location='{TOML_FOLDER}'\n"
+            "target-location='{TOML_FOLDER}/{TODAY}'\n"
             "[backup-folders]\n"
             "'{TOML_FOLDER}'={}\n"
         )
@@ -644,7 +644,7 @@ def test_rsync_timeout(
         blue_backup.RSYNC_TIMEOUT = 1  # type: ignore[attr-defined]
         with toml_file.open("w") as tfile:
             tfile.write(
-                "target-location='127.0.0.1:{TOML_FOLDER}'\n"
+                "target-location='127.0.0.1:{TOML_FOLDER}/{TODAY}'\n"
                 "rsync-options=['--rsh', 'ssh 127.0.0.1 sleep 20;']\n"
                 "[backup-folders]\n"
                 "'{TOML_FOLDER}'={target='target'}\n"
@@ -667,7 +667,7 @@ def test_source_folder(
     (tmp_path / "backup-target").mkdir()
     with toml_file.open("w") as tfile:
         tfile.write(
-            "target-location='{TOML_FOLDER}/backup-target'\n"
+            "target-location='{TOML_FOLDER}/backup-target/{TODAY}'\n"
             "[backup-folders]\n"
             "'{TOML_FOLDER}/backup-source'={}\n"
         )
@@ -692,7 +692,7 @@ def test_source_folder(
     toml_remote_file = tmp_path / "blue-remote.toml"
     with toml_remote_file.open("w") as tfile:
         tfile.write(
-            "target-location='{TOML_FOLDER}/backup-target'\n"
+            "target-location='{TOML_FOLDER}/backup-target/{TODAY}'\n"
             "[backup-folders]\n"
             "'127.0.0.1:{TOML_FOLDER}/backup-remote-source'={}\n"
         )
@@ -716,7 +716,7 @@ def test_source_folder(
     toml_bad_remote_file = tmp_path / "blue-bad-remote.toml"
     with toml_bad_remote_file.open("w") as tfile:
         tfile.write(
-            "target-location='{TOML_FOLDER}/backup-target'\n"
+            "target-location='{TOML_FOLDER}/backup-target/{TODAY}'\n"
             "[backup-folders]\n"
             "'127.0.0.256:{TOML_FOLDER}/backup-remote-source'={}\n"
         )

@@ -1,4 +1,4 @@
-target-location = "{TOML_FOLDER}/target"
+target-location = "{TOML_FOLDER}/target/{TODAY}"
 
 exclude = ["cache", ".cache", "__pycache__"]
 
