@@ -16,7 +16,7 @@ import stat
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
-from typing import BinaryIO, Literal, Sequence, TypedDict, cast
+from typing import BinaryIO, Dict, Literal, Sequence, TypedDict, cast
 
 if sys.version_info >= (3, 11):
     from typing import Self
@@ -167,6 +167,22 @@ class Process:
         return cast(BinaryIO, sftp_file)
 
 
+class Path(pathlib.Path):
+    """A Path class that can handle string formatting."""
+
+    if sys.version_info < (3, 12):
+        _flavour = pathlib.Path()._flavour
+
+    class _Default(Dict[str, str]):
+        def __missing__(self, key: str) -> str:
+            return key.join(["{", "}"])
+
+    def str_format(self, **kwargs: str) -> Self:
+        """str.format() equivalent that ignores missing keys."""
+        str_path = str(self).format_map(Path._Default(**kwargs))
+        return type(self)(str_path)
+
+
 class FolderInfo(TypedDict, total=False):
     """Information in RHS of backup folder table."""
 
@@ -179,8 +195,8 @@ class BackupFolder:
     """Configuration for one backup folder source and target."""
 
     source_address: str | None
-    source_path: pathlib.Path
-    target_path: pathlib.Path
+    source_path: Path
+    target_path: Path
     exclude: tuple[str, ...] = ()
 
     @classmethod
@@ -190,21 +206,20 @@ class BackupFolder:
             source_address, source_folder = source_location.split(":", 2)
         else:
             source_address, source_folder = None, source_location
-        source_path = pathlib.Path(source_folder)
+        source_path = Path(source_folder)
         if "TOML_FOLDER" not in str(source_path) and not source_path.is_absolute():
             raise BlueError(f"Source location '{source_path}' must be absolute path.")
 
         if not isinstance(folder_info, dict):
             raise BlueError(f"Folder info for '{source_location}' must be a table.")
         if "target" in folder_info:
-            target_path = pathlib.Path(folder_info.pop("target"))
+            target_path = Path(folder_info.pop("target"))
         else:
             if source_folder == "{TOML_FOLDER}":
                 raise BlueError(
                     f"Source location '{source_folder}' requires target path."
                 )
-            stripped_source_path = source_folder.format(TOML_FOLDER="")
-            target_path = pathlib.Path(stripped_source_path).relative_to("/")
+            target_path = source_path.str_format(TOML_FOLDER="").relative_to("/")
 
         exclude: list[str] = folder_info.pop("exclude", [])
         if not isinstance(exclude, list):
@@ -228,7 +243,7 @@ class Config:
     """Configuration from the TOML file."""
 
     target_address: str | None
-    target_path: pathlib.Path
+    target_path: Path
     backup_folders: tuple[BackupFolder, ...]
     exclude: tuple[str, ...] = ()
     rsync_options: tuple[str, ...] = ()
@@ -256,7 +271,7 @@ class Config:
         target_address: str | None = None
         if ":" in target_location:
             target_address, target_location = target_location.split(":", 2)
-        target_path = pathlib.Path(target_location)
+        target_path = Path(target_location)
         if "TOML_FOLDER" not in str(target_path) and not target_path.is_absolute():
             raise BlueError(f"Target location '{target_path}' must be absolute path.")
 
@@ -284,12 +299,12 @@ class Config:
 
     def apply_var(self, **kwargs: str) -> None:
         """Apply variable replacement to all paths in configuration."""
-        self.target_path = pathlib.Path(str(self.target_path).format(**kwargs))
+        self.target_path = self.target_path.str_format(**kwargs)
         for bf in self.backup_folders:
-            bf.source_path = pathlib.Path(str(bf.source_path).format(**kwargs))
-            bf.target_path = pathlib.Path(str(bf.target_path).format(**kwargs))
+            bf.source_path = bf.source_path.str_format(**kwargs)
+            bf.target_path = bf.target_path.str_format(**kwargs)
 
-    def get_full_path(self, local_path: pathlib.Path | str) -> str:
+    def get_full_path(self, local_path: Path | str) -> str:
         """Return full path including host address in remote mode."""
         return (
             str(local_path) if self.target_address is None else

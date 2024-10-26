@@ -435,6 +435,20 @@ def test_lock_file(
     lock_file.chmod(lock_file_mode)
 
 
+def test_path_class()-> None:
+    """Test the internal Path class expanding on pathlib.Path."""
+    keyed_path = blue_backup.Path("/folder/{KEY_1}_{KEY_2}")
+    # String formatting works like str.format:
+    resolved_path = keyed_path.str_format(KEY_1="hello", KEY_2="world")
+    assert str(resolved_path) == "/folder/hello_world"
+    # As in str.format redundant keys are ignored:
+    resolved_path = keyed_path.str_format(KEY_1="hello", KEY_2="world", KEY_3="!")
+    assert str(resolved_path) == "/folder/hello_world"
+    # Unlike str.format, missing keys are ignored:
+    resolved_path = keyed_path.str_format(KEY_1="hello")
+    assert str(resolved_path) == "/folder/hello_{KEY_2}"
+
+
 def test_configuration(
     tmp_path: pathlib.Path,
     capsys: pytest.CaptureFixture[str],

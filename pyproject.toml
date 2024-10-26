@@ -34,6 +34,10 @@ ignore = [
 pydocstyle.convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
+"blue-backup" = [
+    "SLF001",  # Private member accessed: `_flavour`
+]
+
 "tests/*.py" = [
     "INP001",  # File `...` is part of an implicit namespace package. Add an `__init__.py`.
     "PT012",  # `pytest.raises()` block should contain a single simple statement
@@ -48,4 +52,6 @@ disable = [
     "invalid-name",
     # Import "import paramiko" should be placed at the top of the module
     "wrong-import-position",
+    # Access to a protected member _flavour of a client class
+    "protected-access",
 ]
