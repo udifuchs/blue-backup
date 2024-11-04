@@ -379,6 +379,35 @@ def test_remote_target_and_source(
     assert (target_path / str(today) / "local" / "file-1.txt").exists()
 
 
+def test_collect_mode(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test backup collection mode."""
+    shutil.copytree("tests/data-to-backup", tmp_path / "data-to-backup")
+    collect_path = tmp_path / "collect"
+    collect_path.mkdir()
+    toml_file = tmp_path / "blue.toml"
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='{TOML_FOLDER}/collect'\n"
+            "[backup-folders]\n"
+            "'{TOML_FOLDER}/data-to-backup' = {target='local'}\n"
+            "'127.0.0.1:{TOML_FOLDER}/data-to-backup' = {target='remote'}\n"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file), "--first-time")
+    captured = capsys.readouterr()
+    assert captured.err == "--first-time cannot be specified in collect mode.\n"
+
+    blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert (collect_path / "blue-backup.log").exists()
+    assert (collect_path / "local").exists()
+    assert (collect_path / "remote").exists()
+
+
 def test_process_class(monkeypatch: pytest.MonkeyPatch) -> None:
     """Direct tests of the Process class."""
     monkeypatch.setattr(getpass, "getpass", lambda _prompt: "wrong-password")

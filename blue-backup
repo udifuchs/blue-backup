@@ -317,6 +317,13 @@ class Config:
         return f"{self.target_address}:{self.target_path}"
 
 
+class Mode(enum.Enum):
+    """Backup mode derived from target folder form."""
+    BACKUP = 0  # Daily backup with date label.
+    COLLECT = 1  # Collect backups to central location.
+    OFFSITE = 2  # Create offsite copy of main daily backup.
+
+
 @dataclasses.dataclass
 class BlueBackup:
     """Backup using rsync."""
@@ -331,11 +338,16 @@ class BlueBackup:
         self._proc: Process | None = None
         today = datetime.date.today()
         if "{TODAY}" in str(self.config.target_path):
-            self.today_folder = self.config.target_path.str_format(TODAY=str(today))
+            self.mode = Mode.BACKUP
+            self.target_folder = self.config.target_path.str_format(TODAY=str(today))
             self.config.target_path = self.config.target_path.str_format(TODAY="")
+            self.log_file = self.target_folder.with_suffix(".log")
         else:
-            raise BlueError("TODAY not specified")
-        self.log_file = self.today_folder.with_suffix(".log")
+            self.mode = Mode.COLLECT
+            self.target_folder = self.config.target_path
+            self.log_file = self.target_folder / "blue-backup.log"
+            if self.first_time:
+                raise BlueError("--first-time cannot be specified in collect mode.")
         self.indent = ""
         self.folder_list: list[pathlib.Path] = []
         self.target_is_btrfs: bool
@@ -405,7 +417,7 @@ class BlueBackup:
         """Initialize the backup."""
         try:
             self._print_output(
-                f"Backup target: {self.config.get_full_path(self.today_folder)}"
+                f"Backup target: {self.config.get_full_path(self.target_folder)}"
             )
         except BlueError as ex:
             raise BlueError(
@@ -414,6 +426,10 @@ class BlueBackup:
             ) from ex
         finally:
             self.indent = "    "
+
+        if self.mode is not Mode.BACKUP:
+            # folder_list and target_is_btrfs are only used in backup mode.
+            return
 
         for path_attr in self.proc.iterdir_attr(self.config.target_path):
             if path_attr.st_mode is not None and stat.S_ISDIR(path_attr.st_mode):
@@ -473,7 +489,10 @@ class BlueBackup:
 
     def create_backup_folder(self) -> None:
         """Prepare a new folder for today's backup."""
-        new_day = self.today_folder not in self.folder_list
+        if self.mode is Mode.COLLECT:
+            return
+
+        new_day = self.target_folder not in self.folder_list
 
         if self.first_time:
             if len(self.folder_list) > 0:
@@ -482,10 +501,10 @@ class BlueBackup:
                     "remove --first-time"
                 )
             if self.target_is_btrfs:
-                self._run("/usr/bin/btrfs", "subvolume", "create", self.today_folder)
+                self._run("/usr/bin/btrfs", "subvolume", "create", self.target_folder)
             else:
-                self._run("/usr/bin/mkdir", self.today_folder)
-            self.folder_list.append(self.today_folder)
+                self._run("/usr/bin/mkdir", self.target_folder)
+            self.folder_list.append(self.target_folder)
 
         elif new_day:  # New day - duplicate last backup folder:
             if len(self.folder_list) == 0:
@@ -502,16 +521,16 @@ class BlueBackup:
                 )
                 self._run(
                     "/usr/bin/btrfs", "subvolume", "snapshot",
-                    last_folder, self.today_folder
+                    last_folder, self.target_folder
                 )
             else:
                 # Show a similar message to the one 'btrfs snapshot' shows:
                 self._print_output(
-                    f"Create a copy of '{last_folder}' in '{self.today_folder}'"
+                    f"Create a copy of '{last_folder}' in '{self.target_folder}'"
                 )
                 # Create a copy using hard links.
-                self._run("/usr/bin/cp", "-al", last_folder, self.today_folder)
-            self.folder_list.append(self.today_folder)
+                self._run("/usr/bin/cp", "-al", last_folder, self.target_folder)
+            self.folder_list.append(self.target_folder)
 
     def backup(self) -> None:
         """Perform the actual backup."""
@@ -552,7 +571,7 @@ class BlueBackup:
                 continue
             # str(path / "_")[:-1] is to ensure that path ends with a "/".
             backup_target_str = str(
-                self.today_folder / backup_folder.target_path / "_"
+                self.target_folder / backup_folder.target_path / "_"
             )[:-1]
             backup_target_str = self.config.get_full_path(backup_target_str)
             try:
@@ -571,7 +590,7 @@ class BlueBackup:
                 self._print_error(str(ex))
 
         # Commit filesystem caches to disk:
-        self._run("/usr/bin/sync", self.today_folder)
+        self._run("/usr/bin/sync", self.target_folder)
 
     def purge(self, *, daily_keep: int) -> None:
         """Purge old backups."""
@@ -602,7 +621,7 @@ class BlueBackup:
     def disk_space(self) -> None:
         """Report available disk space in target location."""
         self._run(
-            "/usr/bin/df", "--human-readable", self.today_folder, log_command=False
+            "/usr/bin/df", "--human-readable", self.target_folder, log_command=False
         )
 
     @classmethod
@@ -627,7 +646,8 @@ def main(*args: str) -> None:
         with lock_file(backup.toml_config):
             backup.init()
             backup.backup()
-            backup.purge(daily_keep=DAILY_KEEP)
+            if backup.mode != Mode.COLLECT:
+                backup.purge(daily_keep=DAILY_KEEP)
             backup.disk_space()
     except BlueError as ex:
         Logger.ERROR.print(str(ex), backup.indent if backup is not None else "")
