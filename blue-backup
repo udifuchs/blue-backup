@@ -336,47 +336,6 @@ class BlueBackup:
         self.folder_list: list[pathlib.Path] = []
         self.target_is_btrfs: bool
 
-    def init(self) -> None:
-        """Initialize the backup."""
-        try:
-            self._print_output(
-                f"Backup target: {self.config.get_full_path(self.today_folder)}"
-            )
-        except BlueError as ex:
-            raise BlueError(
-                "Error writing to target location "
-                f"'{self.config.get_target_location()}': {ex}"
-            ) from ex
-        finally:
-            self.indent = "    "
-
-        for path_attr in self.proc.iterdir_attr(self.config.target_path):
-            if path_attr.st_mode is not None and stat.S_ISDIR(path_attr.st_mode):
-                folder_path = self.config.target_path / path_attr.filename
-                try:
-                    date = datetime.date.fromisoformat(folder_path.name)
-                    iso_date = date.isoformat()
-                    if folder_path.name != iso_date:
-                        raise ValueError(f"{folder_path.name} != {iso_date}")
-                except ValueError as ex:
-                    self._print_warning(
-                        f"Folder {folder_path.name}, non ISO date: {ex}"
-                    )
-                else:
-                    self.folder_list.append(folder_path)
-
-        def check_stat_output(output: bytes) -> None:
-            """Callback for checking target file system type."""
-            str_out = output.decode("utf8").strip()  # Remove any newlines.
-            self.target_is_btrfs = str_out == "btrfs"
-
-        save_dry_run, self.dry_run = self.dry_run, False
-        self._run(
-            "/usr/bin/stat", "--file-system", "--format=%T", self.config.target_path,
-            filter_output=check_stat_output, log_command=False
-        )
-        self.dry_run = save_dry_run
-
     @property
     def proc(self) -> Process:
         """Return active Process."""
@@ -437,6 +396,47 @@ class BlueBackup:
             filter_output(proc.stdout)
         if len(proc.stderr) > 0 or proc.returncode != 0:
             raise ProcessError(proc.stderr.decode("utf8"), proc.returncode)
+
+    def init(self) -> None:
+        """Initialize the backup."""
+        try:
+            self._print_output(
+                f"Backup target: {self.config.get_full_path(self.today_folder)}"
+            )
+        except BlueError as ex:
+            raise BlueError(
+                "Error writing to target location "
+                f"'{self.config.get_target_location()}': {ex}"
+            ) from ex
+        finally:
+            self.indent = "    "
+
+        for path_attr in self.proc.iterdir_attr(self.config.target_path):
+            if path_attr.st_mode is not None and stat.S_ISDIR(path_attr.st_mode):
+                folder_path = self.config.target_path / path_attr.filename
+                try:
+                    date = datetime.date.fromisoformat(folder_path.name)
+                    iso_date = date.isoformat()
+                    if folder_path.name != iso_date:
+                        raise ValueError(f"{folder_path.name} != {iso_date}")
+                except ValueError as ex:
+                    self._print_warning(
+                        f"Folder {folder_path.name}, non ISO date: {ex}"
+                    )
+                else:
+                    self.folder_list.append(folder_path)
+
+        def check_stat_output(output: bytes) -> None:
+            """Callback for checking target file system type."""
+            str_out = output.decode("utf8").strip()  # Remove any newlines.
+            self.target_is_btrfs = str_out == "btrfs"
+
+        save_dry_run, self.dry_run = self.dry_run, False
+        self._run(
+            "/usr/bin/stat", "--file-system", "--format=%T", self.config.target_path,
+            filter_output=check_stat_output, log_command=False
+        )
+        self.dry_run = save_dry_run
 
     def _filter_rsync_output(self, output: bytes) -> None:
         """Filter the output of 'rsync --info=stats2'."""
