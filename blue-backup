@@ -188,6 +188,8 @@ class FolderInfo(TypedDict, total=False):
 
     target: str
     exclude: list[str]
+    chown: str
+    chmod: str
 
 
 @dataclasses.dataclass
@@ -197,7 +199,9 @@ class BackupFolder:
     source_address: str | None
     source_path: Path
     target_path: Path
-    exclude: tuple[str, ...] = ()
+    exclude: tuple[str, ...]
+    chown: str | None
+    chmod: str | None
 
     @classmethod
     def from_toml(cls, source_location: str, folder_info: FolderInfo) -> Self:
@@ -225,9 +229,14 @@ class BackupFolder:
         if not isinstance(exclude, list):
             raise BlueError(f"'exclude' for '{source_folder}' must be an array.")
 
+        chown = folder_info.pop("chown", None)
+        chmod = folder_info.pop("chmod", None)
+
         for key in folder_info:
             Logger.WARNING.print(f"Unknown field for '{source_location}': '{key}'")
-        return cls(source_address, source_path, target_path, tuple(exclude))
+        return cls(
+            source_address, source_path, target_path, tuple(exclude), chown, chmod
+        )
 
     def get_source_location(self) -> str:
         """Get source location formatted for the rsync command."""
@@ -574,9 +583,14 @@ class BlueBackup:
                 self.target_folder / backup_folder.target_path / "_"
             )[:-1]
             backup_target_str = self.config.get_full_path(backup_target_str)
+            rsync_folder_command = list(rsync_command)
+            if backup_folder.chown is not None:
+                rsync_folder_command.append(f"--chown={backup_folder.chown}")
+            if backup_folder.chmod is not None:
+                rsync_folder_command.append(f"--chmod={backup_folder.chmod}")
             try:
                 self._run(
-                    *rsync_command,
+                    *rsync_folder_command,
                     *(
                         f"--exclude={folder}"
                         for folder in self.config.exclude + backup_folder.exclude

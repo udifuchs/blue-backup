@@ -4,6 +4,7 @@ import contextlib
 import datetime
 import getpass
 import importlib
+import os
 import pathlib
 import re
 import shutil
@@ -393,7 +394,13 @@ def test_collect_mode(
             "target-location='{TOML_FOLDER}/collect'\n"
             "[backup-folders]\n"
             "'{TOML_FOLDER}/data-to-backup' = {target='local'}\n"
-            "'127.0.0.1:{TOML_FOLDER}/data-to-backup' = {target='remote'}\n"
+            "'127.0.0.1:{TOML_FOLDER}/data-to-backup' = {"
+            "target='remote',"
+            # Use current user and group in test to avoid permission errors:
+            f"chown='{os.geteuid()}:{os.getegid()}',"
+            # Use weird file permissions:
+            "chmod='707'"
+            "}\n"
         )
     with pytest.raises(SystemExit, match="1"):
         blue_backup.main(str(toml_file), "--first-time")
@@ -406,6 +413,8 @@ def test_collect_mode(
     assert (collect_path / "blue-backup.log").exists()
     assert (collect_path / "local").exists()
     assert (collect_path / "remote").exists()
+    for file_path in (collect_path / "remote").iterdir():
+        assert file_path.stat().st_mode & 0o777 == 0o707
 
 
 def test_process_class(monkeypatch: pytest.MonkeyPatch) -> None:
