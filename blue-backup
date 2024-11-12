@@ -563,21 +563,6 @@ class BlueBackup:
         for backup_folder in self.config.backup_folders:
             source_folder_str = backup_folder.get_source_location()
             self._print_output(f"Backup source: {source_folder_str}")
-            # Check that source folder is not empty or missing:
-            try:
-                source_proc = Process(backup_folder.source_address)
-            except ProcessConnectionError as ex:
-                self._print_error(str(ex))
-                continue
-            try:
-                for _path_attr in source_proc.iterdir_attr(backup_folder.source_path):
-                    break
-                else:
-                    # Empty source folder may indicate unmounted mount-point.
-                    self._print_warning("Source folder is empty.")
-            except FileNotFoundError:
-                self._print_error("Source folder is missing.")
-                continue
             # str(path / "_")[:-1] is to ensure that path ends with a "/".
             backup_target_str = str(
                 self.target_folder / backup_folder.target_path / "_"
