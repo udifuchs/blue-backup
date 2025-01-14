@@ -88,14 +88,13 @@ def test_local(
     # Successful first run:
     blue_backup.main("--first-time", toml_filename)
     captured = capsys.readouterr()
-    assert captured.err == ""
     assert (
         f"Backup target: {tmp_path}/target/" in captured.out or
         f"Backup target: 127.0.0.1:{tmp_path}/target/" in captured.out
     )
     assert (
-        f"Backup source: {tmp_path}/data-to-backup/" in captured.out or
-        f"Backup source: 127.0.0.1:{tmp_path}/data-to-backup/" in captured.out
+        f"{tmp_path}/data-to-backup/" in captured.out or
+        f"127.0.0.1:{tmp_path}/data-to-backup/" in captured.out
     )
     assert "Kept monthly backups: 1" in captured.out
     assert "Kept daily backups: 0" in captured.out

@@ -15,6 +15,7 @@ import pathlib
 import stat
 import subprocess
 import sys
+import time
 from collections.abc import Iterator
 from typing import BinaryIO, Dict, Literal, Sequence, TypedDict, cast
 
@@ -465,35 +466,6 @@ class BlueBackup:
         # if len(proc.stderr) > 0 or proc.returncode != 0:
         #     raise ProcessError(proc)
 
-    def _filter_rsync_output(self, output: bytes) -> None:
-        """Filter the output of 'rsync --info=stats2'."""
-        # The output should look something like:
-        #
-        # Number of files: 321,415 (reg: 277,623, dir: 43,413, link: 375, special: 4)
-        # Number of created files: 54 (reg: 43, dir: 11)
-        # Number of deleted files: 18 (reg: 14, dir: 4)
-        # Number of regular files transferred: 239
-        # Total file size: 177.91G bytes
-        # Total transferred file size: 4.45G bytes
-        # Literal data: 4.45G bytes
-        # Matched data: 0 bytes
-        # File list size: 851.87K
-        # File list generation time: 0.001 seconds
-        # File list transfer time: 0.000 seconds
-        # Total bytes sent: 4.46G
-        # Total bytes received: 51.68K
-        #
-        # sent 4.46G bytes  received 51.68K bytes  33.93M bytes/sec
-        # total size is 177.91G  speedup is 39.87
-        out_lines = [
-            line for line in output.decode("utf8").split("\n")
-            if line.startswith((
-                "Total file size:",
-                "Total transferred file size:",
-            ))
-        ]
-        self._print_output(" / ".join(out_lines))
-
     def create_backup_folder(self) -> None:
         """Prepare a new folder for today's backup."""
         if self.mode is Mode.COLLECT:
@@ -539,6 +511,79 @@ class BlueBackup:
                 self._run("/usr/bin/cp", "-al", last_folder, self.target_folder)
             self.folder_list.append(self.target_folder)
 
+    def _filter_rsync_output(self, output: bytes) -> dict[str, str]:
+        """Filter the output of 'rsync --info=stats2'."""
+        # The output should look something like:
+        #
+        # Number of files: 321,415 (reg: 277,623, dir: 43,413, link: 375, special: 4)
+        # Number of created files: 54 (reg: 43, dir: 11)
+        # Number of deleted files: 18 (reg: 14, dir: 4)
+        # Number of regular files transferred: 239
+        # Total file size: 177.91G bytes
+        # Total transferred file size: 4.45G bytes
+        # Literal data: 4.45G bytes
+        # Matched data: 0 bytes
+        # File list size: 851.87K
+        # File list generation time: 0.001 seconds
+        # File list transfer time: 0.000 seconds
+        # Total bytes sent: 4.46G
+        # Total bytes received: 51.68K
+        #
+        # sent 4.46G bytes  received 51.68K bytes  33.93M bytes/sec
+        # total size is 177.91G  speedup is 39.87
+        keep_rules = {
+            "Number of files: ": "files",
+            "Number of regular files transferred: ": "trans",
+            "Total file size: ": "files_size",
+            "Total transferred file size: ": "trans_size",
+        }
+        return {
+            token_name: line.split(": ")[1].split(" ")[0]
+            for line in output.decode("utf8").split("\n")
+            for line_header, token_name in keep_rules.items()
+            if line.startswith(line_header)
+        }
+
+    def _print_rsync_summary(self, summary: dict[str, dict[str, str]]) -> None:
+        # Loosely based in rsnapreport from rsnapshot.
+        if not summary:
+            return
+        header = {
+            "source_folder_str": "Source", "time": "Time",
+            "files": "Total files", "files_size": "bytes",
+            "trans": "Transferred", "trans_size": "bytes"
+        }
+        max_source = max(len(source_folder_str) for source_folder_str in summary)
+        max_files = max(len(stats["files"]) for stats in (*summary.values(), header))
+        max_files_size = max(
+            len(stats["files_size"]) for stats in (*summary.values(), header)
+        )
+        max_trans = max(len(stats["trans"]) for stats in (*summary.values(), header))
+        max_trans_size = max(
+            len(stats["trans_size"]) for stats in (*summary.values(), header)
+        )
+        max_time = max(len(stats["time"]) for stats in (*summary.values(), header))
+        out_format = (
+            f"{{source_folder_str: <{max_source}}} | "
+            f"{{files: >{max_files}}} / {{files_size: >{max_files_size}}} | "
+            f"{{trans: >{max_trans}}} / {{trans_size: >{max_trans_size}}} | "
+            f"{{time: >{max_time}}}"
+        )
+        # Print table header:
+        self._print_output(out_format.format(**header))
+        # Print table separator:
+        self._print_output(out_format
+            .replace(" ", "-").replace("/", "-").replace("|", "+")
+            .format(
+                source_folder_str="",
+                files="", files_size="",
+                trans="", trans_size="", time=""
+        ))
+        for source_folder_str, stats in summary.items():
+            self._print_output(out_format.format(
+                source_folder_str=source_folder_str, **stats
+            ))
+
     def backup(self) -> None:
         """Perform the actual backup."""
         self.create_backup_folder()
@@ -558,9 +603,10 @@ class BlueBackup:
             # Log to file on the remote (receiver) side:
             rsync_command.append(f"--remote-option=--log-file={self.log_file}")
 
+        backup_stats: dict[str, dict[str, str]] = {}
         for backup_folder in self.config.backup_folders:
+            start_time = time.time()
             source_folder_str = backup_folder.get_source_location()
-            self._print_output(f"Backup source: {source_folder_str}")
             # str(path / "_")[:-1] is to ensure that path ends with a "/".
             backup_target_str = str(
                 self.target_folder / backup_folder.target_path / "_"
@@ -583,9 +629,16 @@ class BlueBackup:
                 force_local=True,
             )
             if proc is not None:
-                self._filter_rsync_output(proc.stdout)
                 if len(proc.stderr) > 0 or proc.returncode != 0:
+                    self._print_error(f"Errors for: {source_folder_str}")
                     self._print_error(str(ProcessError(proc)))
+                stats = self._filter_rsync_output(proc.stdout)
+                if stats:
+                    delta_seconds = round(time.time() - start_time)
+                    stats["time"] = str(datetime.timedelta(seconds=delta_seconds))
+                    backup_stats[source_folder_str] = stats
+
+        self._print_rsync_summary(backup_stats)
 
         # Commit filesystem caches to disk:
         self._run("/usr/bin/sync", self.target_folder)
@@ -618,9 +671,7 @@ class BlueBackup:
 
     def disk_space(self) -> None:
         """Report available disk space in target location."""
-        self._run(
-            "/usr/bin/df", "--human-readable", self.target_folder
-        )
+        self._run("/usr/bin/df", "--human-readable", self.target_folder)
 
     @classmethod
     def from_command_line_arguments(cls, *args: str) -> Self:
