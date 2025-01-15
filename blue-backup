@@ -461,10 +461,10 @@ class BlueBackup:
             "/usr/bin/stat", "--file-system", "--format=%T",
             str(self.config.target_path),
         ])
+        if len(proc.stderr) > 0 or proc.returncode != 0:
+            raise ProcessError(proc)
         str_out = proc.stdout.decode("utf8").strip()  # Remove any newlines.
         self.target_is_btrfs = str_out == "btrfs"
-        # if len(proc.stderr) > 0 or proc.returncode != 0:
-        #     raise ProcessError(proc)
 
     def create_backup_folder(self) -> None:
         """Prepare a new folder for today's backup."""
@@ -670,9 +670,26 @@ class BlueBackup:
             f"Kept backups: {monthly_backups} monthly, {len(folder_list)} daily"
         )
 
-    def disk_space(self) -> None:
-        """Report available disk space in target location."""
-        self._run("/usr/bin/df", "--human-readable", self.target_folder)
+    def report_space_available(self) -> None:
+        """Report target device usage and available space."""
+        proc = self._run_return_proc(
+            "/usr/bin/df", "--human-readable", self.target_folder
+        )
+        if proc is not None:
+            str_out = proc.stdout.decode("utf8")
+            if len(proc.stderr) > 0 or proc.returncode != 0:
+                raise ProcessError(proc)
+            # Output of /usr/bin/df:
+            # Filesystem      Size  Used Avail Use% Mounted on
+            # -               3.7T  2.3T  1.5T  62% /backup/2020-02-02
+            str_out = str_out.split("\n")[1]  # Use second line.
+            str_data = str_out.split(maxsplit=5)
+            # Desired output:
+            # Target device usage: 2.3T / 3.7T (62%) available 1.5T
+            self._print_output(
+                f"Target device usage: {str_data[2]} / {str_data[1]} ({str_data[4]}) "
+                f"available: {str_data[3]}"
+            )
 
     @classmethod
     def from_command_line_arguments(cls, *args: str) -> Self:
@@ -698,7 +715,7 @@ def main(*args: str) -> None:
             backup.backup()
             if backup.mode != Mode.COLLECT:
                 backup.purge(daily_keep=DAILY_KEEP)
-            backup.disk_space()
+            backup.report_space_available()
     except BlueError as ex:
         Logger.ERROR.print(str(ex), backup.indent if backup is not None else "")
         raise SystemExit(1) from ex
