@@ -96,8 +96,7 @@ def test_local(
         f"{tmp_path}/data-to-backup/" in captured.out or
         f"127.0.0.1:{tmp_path}/data-to-backup/" in captured.out
     )
-    assert "Kept monthly backups: 1" in captured.out
-    assert "Kept daily backups: 0" in captured.out
+    assert "Kept backups: 1 monthly, 0 daily" in captured.out
     assert captured.err == ""
 
     today = datetime.date.today()
@@ -128,8 +127,7 @@ def test_local(
         captured.out.startswith(f"Backup target: 127.0.0.1:{target_path}/{today}")
     )
     assert "/usr/bin/rsync" in captured.out
-    assert "Kept monthly backups: 1" in captured.out
-    assert "Kept daily backups: 0" in captured.out
+    assert "Kept backups: 1 monthly, 0 daily" in captured.out
     assert captured.err == ""
 
     subtest_multi_dates_backup(toml_filename, capsys)
@@ -148,9 +146,11 @@ def subtest_multi_dates_backup(
         blue_backup.main(toml_filename)
         captured = capsys.readouterr()
         monthly_backups = 1 if FIRST_FAKE_DATE[0] in FakeDate.fake_today else 2
-        assert f"Kept monthly backups: {monthly_backups}" in captured.out
         daily_backups = min(i + 1 - monthly_backups, 20)
-        assert f"Kept daily backups: {daily_backups}" in captured.out
+        assert (
+            f"Kept backups: {monthly_backups} monthly, {daily_backups} daily" in
+            captured.out
+        )
         if captured.err != "":
             # Deleting a btrfs subvolume without root permissions is tricky.
             assert (

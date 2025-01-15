@@ -654,7 +654,6 @@ class BlueBackup:
                 monthly_backups += 1
                 folder_list.pop(folder_list.index(folder))
                 months.remove(folder.name[:7])
-        self._print_output(f"Kept monthly backups: {monthly_backups}")
 
         while len(folder_list) > daily_keep:
             try:
@@ -667,7 +666,9 @@ class BlueBackup:
             except ProcessError as ex:
                 self._print_error(str(ex))
             folder_list.pop(0)
-        self._print_output(f"Kept daily backups: {len(folder_list)}")
+        self._print_output(
+            f"Kept backups: {monthly_backups} monthly, {len(folder_list)} daily"
+        )
 
     def disk_space(self) -> None:
         """Report available disk space in target location."""
