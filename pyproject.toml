@@ -21,7 +21,6 @@ ignore = [
     "COM812",  # Trailing comma missing
     "D105",  # Missing docstring in magic method
     "D107",  # Missing docstring in __init__
-    "DTZ011",  # `datetime.date.today()` used
     "EM101",  # Exception must not use a string literal, assign to variable first
     "EM102",  # Exception must not use an f-string literal, assign to variable first
     "ERA001",  # Found commented-out code

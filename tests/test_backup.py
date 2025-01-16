@@ -1,5 +1,7 @@
 """Test functionality of blue-backup."""
 
+from __future__ import annotations
+
 import contextlib
 import datetime
 import getpass
@@ -31,18 +33,26 @@ loader.exec_module(blue_backup)
 FIRST_FAKE_DATE = 1999, 12, 25
 
 
-class FakeDate(datetime.date):
-    """Fake the date class to mock today's date."""
+class FakeDatetime(datetime.datetime):
+    """Fake the datetime class to mock today's date."""
 
     fake_today = FIRST_FAKE_DATE
 
     @classmethod
-    def today(cls) -> Self:
+    def now(cls, tz: datetime.tzinfo | None = None) -> Self:
         """Mock today's date."""
-        return cls(*FakeDate.fake_today)
+        if tz is None:
+            tz = datetime.timezone.utc
+        return cls(*FakeDatetime.fake_today, tzinfo=tz)
+
+    def astimezone(self, tz: datetime.tzinfo | None = None) -> Self:
+        """Set system time zone to UTC for consistent test output."""
+        if tz is None:
+            tz = datetime.timezone.utc
+        return super().astimezone(tz=tz)
 
 
-datetime.date = FakeDate  # type: ignore[misc]
+datetime.datetime = FakeDatetime  # type: ignore[misc]
 
 
 def test_local(
@@ -58,7 +68,7 @@ def test_local(
     shutil.copy(f"tests/{toml_config}", toml_filename)
     shutil.copytree("tests/data-to-backup", tmp_path / "data-to-backup")
 
-    FakeDate.fake_today = FIRST_FAKE_DATE
+    FakeDatetime.fake_today = FIRST_FAKE_DATE
 
     target_path = tmp_path / "target"
     # Try and fail backup to non-existing target folder:
@@ -99,7 +109,7 @@ def test_local(
     assert "Kept backups: 1 monthly, 0 daily" in captured.out
     assert captured.err == ""
 
-    today = datetime.date.today()
+    today = datetime.datetime.now().astimezone().date()
     # Check that file-1.txt was backed up:
     assert (target_path / str(today) / "data-to-backup" / "file-1.txt").exists()
     # Check that cache was not backed up:
@@ -141,11 +151,11 @@ def subtest_multi_dates_backup(
     """Simulate backups on multiple days."""
     # Loop over enough days to have old daily backups removed:
     for i in range(1, 23):
-        next_date = FakeDate.today() + datetime.timedelta(days=1)
-        FakeDate.fake_today = next_date.timetuple()[:3]
+        next_date = FakeDatetime.now().date() + datetime.timedelta(days=1)
+        FakeDatetime.fake_today = next_date.timetuple()[:3]
         blue_backup.main(toml_filename)
         captured = capsys.readouterr()
-        monthly_backups = 1 if FIRST_FAKE_DATE[0] in FakeDate.fake_today else 2
+        monthly_backups = 1 if FIRST_FAKE_DATE[0] in FakeDatetime.fake_today else 2
         daily_backups = min(i + 1 - monthly_backups, 20)
         assert (
             f"Kept backups: {monthly_backups} monthly, {daily_backups} daily" in
@@ -374,7 +384,7 @@ def test_remote_target_and_source(
 
     # Test that local source was backed up despite the error:
     target_path = tmp_path / "target"
-    today = datetime.date.today()
+    today = datetime.datetime.now().astimezone().date()
     # Check that file-1.txt was backed up:
     assert (target_path / str(today) / "local" / "file-1.txt").exists()
 
@@ -627,7 +637,9 @@ def test_configuration_errors(
     with pytest.raises(SystemExit, match="1"):
         blue_backup.main(str(toml_file))
     captured = capsys.readouterr()
-    assert captured.out == "Backup target: 256.256.256.256:/1999-12-25\n"
+    assert (
+        captured.out == "Backup target: 256.256.256.256:/1999-12-25 at 00:00:00+00:00\n"
+    )
     assert (
         captured.err ==
         "    Error writing to target location '256.256.256.256:/': "

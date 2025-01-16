@@ -347,7 +347,8 @@ class BlueBackup:
 
     def __post_init__(self) -> None:
         self._proc: Process | None = None
-        today = datetime.date.today()
+        self.now = datetime.datetime.now().astimezone().replace(microsecond=0)
+        today = self.now.date()
         if "{TODAY}" in str(self.config.target_path):
             self.mode = Mode.BACKUP
             self.target_folder = self.config.target_path.str_format(TODAY=str(today))
@@ -427,7 +428,8 @@ class BlueBackup:
         """Initialize the backup."""
         try:
             self._print_output(
-                f"Backup target: {self.config.get_full_path(self.target_folder)}"
+                f"Backup target: {self.config.get_full_path(self.target_folder)} "
+                f"at {self.now.timetz()}"
             )
         except BlueError as ex:
             raise BlueError(
