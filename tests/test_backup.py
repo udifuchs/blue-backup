@@ -17,7 +17,7 @@ from typing import Iterator
 if sys.version_info >= (3, 11):
     from typing import Self
 else:  # Avoid depending on typing-extensions
-    from typing import Any as Self
+    Self = None
 
 import pytest
 
@@ -333,13 +333,17 @@ def test_btrfs(
                 )
                 assert "Return code: 23" in captured.err
         captured = capsys.readouterr()
-        assert re.search(  # Error on writing to local log:
-            r"Error writing to '(.)*/target/(.)*\.log': "
-            r"\[Errno 28\] No space left on device",
-            captured.err
-        ) is not None or re.search(  # Error on writing to remote log:
-            r"Error writing to '127.0.0.1:(.)*/target/(.)*\.log': Failure", captured.err
-        ) is not None
+        assert (
+            re.search(  # Error on writing to local log:
+                r"Error writing to '(.)*/target/(.)*\.log': "
+                r"\[Errno 28\] No space left on device",
+                captured.err
+            ) is not None or
+            re.search(  # Error on writing to remote log:
+                r"Error writing to '127.0.0.1:(.)*/target/(.)*\.log': Failure",
+                captured.err
+            ) is not None
+        )
 
 
 # Remote tests use local address 127.0.0.1. Therefore, these tests will fail
@@ -462,9 +466,8 @@ def test_lock_file(
 
     # Fail locking the same lock file twice:
     with blue_backup.lock_file(lock_file):
-        with \
-            pytest.raises(blue_backup.BlueError) as block_exc, \
-            blue_backup.lock_file(lock_file):
+        with pytest.raises(blue_backup.BlueError) as block_exc, \
+             blue_backup.lock_file(lock_file):
             pass
         assert (
             str(block_exc.value) ==
@@ -474,15 +477,14 @@ def test_lock_file(
     # Fail if we have no access to the lock file:
     lock_file_mode = lock_file.stat().st_mode
     lock_file.chmod(0)
-    with \
-        pytest.raises(PermissionError) as exc_info, \
-        blue_backup.lock_file(lock_file):
-            pass
+    with pytest.raises(PermissionError) as exc_info, \
+         blue_backup.lock_file(lock_file):
+        pass
     assert str(exc_info.value) == f"[Errno 13] Permission denied: '{lock_file}'"
     lock_file.chmod(lock_file_mode)
 
 
-def test_path_class()-> None:
+def test_path_class() -> None:
     """Test the internal Path class expanding on pathlib.Path."""
     keyed_path = blue_backup.Path("/folder/{KEY_1}_{KEY_2}")
     # String formatting works like str.format:
@@ -670,7 +672,7 @@ def test_configuration_errors(
     captured = capsys.readouterr()
     assert captured.err == "Source location '{TOML_FOLDER}' requires target path.\n"
 
-   # Missing permissions to TOML file:
+    # Missing permissions to TOML file:
     toml_file.chmod(0)
     with pytest.raises(SystemExit, match="1"):
         blue_backup.main(str(toml_file))

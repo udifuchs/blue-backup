@@ -22,7 +22,7 @@ from typing import BinaryIO, Dict, Literal, Sequence, TypedDict, cast
 if sys.version_info >= (3, 11):
     from typing import Self
 else:  # Avoid depending on typing-extensions
-    from typing import Any as Self
+    Self = None
 
 if sys.version_info >= (3, 10):
     from typing import TypeAlias
@@ -318,9 +318,10 @@ class Config:
     def get_full_path(self, local_path: Path | str) -> str:
         """Return full path including host address in remote mode."""
         return (
-            str(local_path) if self.target_address is None else
-            f"{self.target_address}:{local_path}"
+            str(local_path) if self.target_address is None
+            else f"{self.target_address}:{local_path}"
         )
+
     def get_target_location(self) -> str:
         """Get target location."""
         if self.target_address is None:
@@ -513,7 +514,8 @@ class BlueBackup:
                 self._run("/usr/bin/cp", "-al", last_folder, self.target_folder)
             self.folder_list.append(self.target_folder)
 
-    def _filter_rsync_output(self, output: bytes) -> dict[str, str]:
+    @staticmethod
+    def _filter_rsync_output(output: bytes) -> dict[str, str]:
         """Filter the output of 'rsync --info=stats2'."""
         # The output should look something like:
         #
@@ -574,17 +576,17 @@ class BlueBackup:
         # Print table header:
         self._print_output(out_format.format(**header))
         # Print table separator:
-        self._print_output(out_format
-            .replace(" ", "-").replace("/", "-").replace("|", "+")
-            .format(
+        self._print_output(
+            out_format.replace(" ", "-").replace("/", "-").replace("|", "+").format(
                 source_folder_str="",
                 files="", files_size="",
                 trans="", trans_size="", time=""
-        ))
+            )
+        )
         for source_folder_str, stats in summary.items():
-            self._print_output(out_format.format(
-                source_folder_str=source_folder_str, **stats
-            ))
+            self._print_output(
+                out_format.format(source_folder_str=source_folder_str, **stats)
+            )
 
     def backup(self) -> None:
         """Perform the actual backup."""
