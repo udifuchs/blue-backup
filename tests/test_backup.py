@@ -140,8 +140,42 @@ def test_local(
     assert "Kept backups: 1 monthly, 0 daily" in captured.out
     assert captured.err == ""
 
+    subtest_offsite_mode(tmp_path, capsys)
     subtest_multi_dates_backup(toml_filename, capsys)
     subtest_iso_date_folders(target_path, toml_filename, capsys)
+
+
+def subtest_offsite_mode(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test backup offsite mode."""
+    offsite_path = tmp_path / "offsite"
+    offsite_path.mkdir()
+    toml_file = tmp_path / "blue-offsite.toml"
+
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='{TOML_FOLDER}/offsite/{LATEST}'\n"
+            "[backup-folders]\n"
+            "'{TOML_FOLDER}/target/{LATEST}' = {target=''}"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert (
+        captured.err ==
+        "    This is the first time you are backing up to this folder, "
+        "specify --first-time\n"
+    )
+
+    blue_backup.main(str(toml_file), "--first-time", "--verbose")
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    today = datetime.datetime.now().astimezone().date()
+    # Check that file-1.txt was backed up:
+    assert (offsite_path / f"{today}.log").exists()
+    assert (offsite_path / str(today) / "data-to-backup" / "file-1.txt").exists()
 
 
 def subtest_multi_dates_backup(
@@ -401,7 +435,7 @@ def test_collect_mode(
     shutil.copytree("tests/data-to-backup", tmp_path / "data-to-backup")
     collect_path = tmp_path / "collect"
     collect_path.mkdir()
-    toml_file = tmp_path / "blue.toml"
+    toml_file = tmp_path / "blue-collect.toml"
     with toml_file.open("w") as tfile:
         tfile.write(
             "target-location='{TOML_FOLDER}/collect'\n"
@@ -681,6 +715,74 @@ def test_configuration_errors(
         captured.err ==
         f"Failed to read '{toml_file}': [Errno 13] Permission denied: '{toml_file}'\n"
     )
+
+
+def test_offsite_mode_errors(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test handling of errors on offsite mode."""
+    toml_file = tmp_path / "blue.toml"
+
+    # Multiple sources in offsite mode:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='{TOML_FOLDER}/offsite/{LATEST}'\n"
+            "[backup-folders]\n"
+            "'{TOML_FOLDER}/target/{LATEST}' = {target=''}\n"
+            "'{TOML_FOLDER}/target-2/{LATEST}' = {target=''}"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert (
+        captured.err == "Only one backup folder allowed in offsite mode.\n"
+    )
+
+    # No source folder with {LATEST} field in offsite mode:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='{TOML_FOLDER}/offsite/{LATEST}'\n"
+            "[backup-folders]\n"
+            "'{TOML_FOLDER}/target' = {target=''}\n"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert (
+        captured.err == "Missing backup folder with {LATEST} field in offsite mode.\n"
+    )
+
+    # Non-empty target in offsite mode:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='{TOML_FOLDER}/offsite/{LATEST}'\n"
+            "[backup-folders]\n"
+            "'{TOML_FOLDER}/target/{LATEST}' = {}"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert (
+        captured.err ==
+        "Backup folder target must be empty (target='') in offsite mode.\n"
+    )
+
+    bad_target_path = tmp_path / "bad_target"
+    bad_target_path.mkdir()
+    (bad_target_path / "not-a-date").mkdir()
+    # YYYMMDD is an ISO date, but not in a format blue-backup accepts.
+    (bad_target_path / "20191204").mkdir()
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='{TOML_FOLDER}/offsite/{LATEST}'\n"
+            "[backup-folders]\n"
+            "'{TOML_FOLDER}/bad_target/{LATEST}' = {target=''}"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert captured.err == f"No dated folders found in '{bad_target_path}'\n"
 
 
 def test_rsync_timeout(

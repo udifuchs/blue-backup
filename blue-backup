@@ -248,6 +248,32 @@ class BackupFolder:
             return source_folder_str
         return f"{self.source_address}:{source_folder_str}"
 
+    def get_latest_folder_date(self) -> str:
+        """Find the subfolder with the latest date in the source path.
+
+        This function has the side effect of setting the LATEST field
+        in the source path.
+        """
+        proc = Process(self.source_address)
+        base_path = self.source_path.str_format(LATEST="")
+        latest_date: str | None = None
+        for path_attr in proc.iterdir_attr(base_path):
+            if path_attr.st_mode is not None and stat.S_ISDIR(path_attr.st_mode):
+                try:
+                    date = datetime.date.fromisoformat(path_attr.filename)
+                    iso_date = date.isoformat()
+                    if (
+                        path_attr.filename == iso_date and
+                        (latest_date is None or path_attr.filename > latest_date)
+                    ):
+                        latest_date = path_attr.filename
+                except ValueError:
+                    pass
+        if latest_date is None:
+            raise BlueError(f"No dated folders found in '{base_path}'")
+        self.source_path = self.source_path.str_format(LATEST=latest_date)
+        return latest_date
+
 
 @dataclasses.dataclass
 class Config:
@@ -345,15 +371,33 @@ class BlueBackup:
     first_time: bool = False
     dry_run: bool = False
     verbose: bool = False
+    _proc: Process | None = dataclasses.field(default=None, init=False)
 
     def __post_init__(self) -> None:
-        self._proc: Process | None = None
         self.now = datetime.datetime.now().astimezone().replace(microsecond=0)
         today = self.now.date()
+
         if "{TODAY}" in str(self.config.target_path):
             self.mode = Mode.BACKUP
             self.target_folder = self.config.target_path.str_format(TODAY=str(today))
             self.config.target_path = self.config.target_path.str_format(TODAY="")
+            self.log_file = self.target_folder.with_suffix(".log")
+        elif "{LATEST}" in str(self.config.target_path):
+            self.mode = Mode.OFFSITE
+            if len(self.config.backup_folders) != 1:
+                raise BlueError("Only one backup folder allowed in offsite mode.")
+            backup_folder = self.config.backup_folders[0]
+            if "{LATEST}" not in str(backup_folder.source_path):
+                raise BlueError(
+                    "Missing backup folder with {LATEST} field in offsite mode."
+                )
+            if str(backup_folder.target_path) != ".":
+                raise BlueError(
+                    "Backup folder target must be empty (target='') in offsite mode."
+                )
+            latest_date = backup_folder.get_latest_folder_date()
+            self.target_folder = self.config.target_path.str_format(LATEST=latest_date)
+            self.config.target_path = self.config.target_path.str_format(LATEST="")
             self.log_file = self.target_folder.with_suffix(".log")
         else:
             self.mode = Mode.COLLECT
@@ -361,6 +405,7 @@ class BlueBackup:
             self.log_file = self.target_folder / "blue-backup.log"
             if self.first_time:
                 raise BlueError("--first-time cannot be specified in collect mode.")
+
         self.indent = ""
         self.folder_list: list[pathlib.Path] = []
         self.target_is_btrfs: bool
@@ -440,23 +485,23 @@ class BlueBackup:
         finally:
             self.indent = "    "
 
-        if self.mode is not Mode.BACKUP:
-            # folder_list and target_is_btrfs are only used in backup mode.
+        if self.mode is Mode.COLLECT:
+            # folder_list and target_is_btrfs are not used in COLLECT mode.
             return
 
         for path_attr in self.proc.iterdir_attr(self.config.target_path):
             if path_attr.st_mode is not None and stat.S_ISDIR(path_attr.st_mode):
-                folder_path = self.config.target_path / path_attr.filename
                 try:
-                    date = datetime.date.fromisoformat(folder_path.name)
+                    date = datetime.date.fromisoformat(path_attr.filename)
                     iso_date = date.isoformat()
-                    if folder_path.name != iso_date:
-                        raise ValueError(f"{folder_path.name} != {iso_date}")
+                    if path_attr.filename != iso_date:
+                        raise ValueError(f"{path_attr.filename} != {iso_date}")
                 except ValueError as ex:
                     self._print_warning(
-                        f"Folder {folder_path.name}, non ISO date: {ex}"
+                        f"Folder {path_attr.filename}, non ISO date: {ex}"
                     )
                 else:
+                    folder_path = self.config.target_path / path_attr.filename
                     self.folder_list.append(folder_path)
 
         # Call proc.run() directly because we never want a dry_run here.
@@ -508,7 +553,8 @@ class BlueBackup:
             else:
                 # Show a similar message to the one 'btrfs snapshot' shows:
                 self._print_output(
-                    f"Create a copy of '{last_folder}' in '{self.target_folder}'"
+                    f"Create a hard link copy of '{last_folder}' "
+                    f"in '{self.target_folder}'"
                 )
                 # Create a copy using hard links.
                 self._run("/usr/bin/cp", "-al", last_folder, self.target_folder)
