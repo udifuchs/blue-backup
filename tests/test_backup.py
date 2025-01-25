@@ -150,6 +150,7 @@ def subtest_offsite_mode(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Test backup offsite mode."""
+    target_path = tmp_path / "target"
     offsite_path = tmp_path / "offsite"
     offsite_path.mkdir()
     toml_file = tmp_path / "blue-offsite.toml"
@@ -157,8 +158,9 @@ def subtest_offsite_mode(
     with toml_file.open("w") as tfile:
         tfile.write(
             "target-location='{TOML_FOLDER}/offsite/{LATEST}'\n"
-            "[backup-folders]\n"
-            "'{TOML_FOLDER}/target/{LATEST}' = {target=''}"
+            "[backup-folders.'{TOML_FOLDER}/target/{LATEST}']\n"
+            "target=''\n"
+            "rsync-options=['--backup-dir=old']"
         )
     with pytest.raises(SystemExit, match="1"):
         blue_backup.main(str(toml_file))
@@ -172,10 +174,27 @@ def subtest_offsite_mode(
     blue_backup.main(str(toml_file), "--first-time", "--verbose")
     captured = capsys.readouterr()
     assert captured.err == ""
-    today = datetime.datetime.now().astimezone().date()
+    today = str(datetime.datetime.now().astimezone().date())
     # Check that file-1.txt was backed up:
     assert (offsite_path / f"{today}.log").exists()
-    assert (offsite_path / str(today) / "data-to-backup" / "file-1.txt").exists()
+    assert (offsite_path / today / "data-to-backup" / "file-1.txt").exists()
+    assert not (offsite_path / today / "old").exists()
+
+    # Modify origin to trigger use of --backup-dir.
+    with (target_path / today / "data-to-backup" / "file-1.txt").open("a") as f:
+        f.write("added line\n")
+
+    # Test second run:
+    blue_backup.main(str(toml_file), "--verbose")
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    # Check that file-1.txt was backed up:
+    assert (offsite_path / f"{today}.log").exists()
+    assert (offsite_path / today / "data-to-backup" / "file-1.txt").exists()
+    assert not (offsite_path / today / "data-to-backup" / "old").exists()
+    # Test that --backup-dir=old from rsync-options in backup-folders was applied:
+    assert (offsite_path / today / "old").exists()
+    assert (offsite_path / today / "old" / "data-to-backup" / "file-1.txt").exists()
 
 
 def subtest_multi_dates_backup(
@@ -630,6 +649,18 @@ def test_configuration_scheme_errors(
         blue_backup.main(str(toml_file))
     captured = capsys.readouterr()
     assert captured.err == "'rsync-options' must be an array.\n"
+
+    # Source folder rsync-options not an array:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='{TOML_FOLDER}/{TODAY}'\n"
+            "[backup-folders]\n"
+            "'/my-folder'={rsync-options='--my-rsync-option'}\n"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert captured.err == "'rsync-options' for '/my-folder' must be an array.\n"
 
     # Backup folder info not a table:
     with toml_file.open("w") as tfile:

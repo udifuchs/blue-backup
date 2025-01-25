@@ -17,7 +17,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Iterator
-from typing import BinaryIO, Dict, Literal, Sequence, TypedDict, cast
+from typing import BinaryIO, Dict, List, Literal, Sequence, TypedDict, cast
 
 if sys.version_info >= (3, 11):
     from typing import Self
@@ -185,13 +185,14 @@ class Path(pathlib.Path):
         return type(self)(str_path)
 
 
-class FolderInfo(TypedDict, total=False):
-    """Information in RHS of backup folder table."""
-
-    target: str
-    exclude: list[str]
-    chown: str
-    chmod: str
+FolderInfo = TypedDict("FolderInfo", {
+    # Information in RHS of backup folder table.
+    "target": str,
+    "exclude": List[str],
+    "chown": str,
+    "chmod": str,
+    "rsync-options": List[str],
+}, total=False)
 
 
 @dataclasses.dataclass
@@ -204,6 +205,7 @@ class BackupFolder:
     exclude: tuple[str, ...]
     chown: str | None
     chmod: str | None
+    rsync_options: tuple[str, ...] = ()
 
     @classmethod
     def from_toml(cls, source_location: str, folder_info: FolderInfo) -> Self:
@@ -233,11 +235,15 @@ class BackupFolder:
 
         chown = folder_info.pop("chown", None)
         chmod = folder_info.pop("chmod", None)
+        rsync_options: list[str] = folder_info.pop("rsync-options", [])
+        if not isinstance(rsync_options, list):
+            raise BlueError(f"'rsync-options' for '{source_folder}' must be an array.")
 
         for key in folder_info:
             Logger.WARNING.print(f"Unknown field for '{source_location}': '{key}'")
         return cls(
-            source_address, source_path, target_path, tuple(exclude), chown, chmod
+            source_address, source_path, target_path,
+            tuple(exclude), chown, chmod, tuple(rsync_options)
         )
 
     def get_source_location(self) -> str:
@@ -667,6 +673,7 @@ class BlueBackup:
                 rsync_folder_command.append(f"--chown={backup_folder.chown}")
             if backup_folder.chmod is not None:
                 rsync_folder_command.append(f"--chmod={backup_folder.chmod}")
+            rsync_folder_command += backup_folder.rsync_options
 
             proc = self._run_return_proc(
                 *rsync_folder_command,
