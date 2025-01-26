@@ -589,11 +589,11 @@ def test_configuration(
     assert captured.err == ""
 
 
-def test_configuration_scheme_errors(
+def test_configuration_schema_errors(
     tmp_path: pathlib.Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Test handling of errors in the scheme of the TOML configuration file."""
+    """Test handling of errors in the schema of the TOML configuration file."""
     toml_file = tmp_path / "blue.toml"
 
     # Empty TOML file has missing fields:
@@ -601,7 +601,26 @@ def test_configuration_scheme_errors(
     with pytest.raises(SystemExit, match="1"):
         blue_backup.main(str(toml_file))
     captured = capsys.readouterr()
-    assert captured.err == f"Missing in '{toml_file}': 'target-location'\n"
+    assert captured.err == f"Missing string 'target-location' in {toml_file}\n"
+
+    # target-location not a string:
+    with toml_file.open("w") as tfile:
+        tfile.write("target-location=['{TOML_FOLDER}/{TODAY}']\n")
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert (
+        captured.err == f"Expected string for 'target-location' in {toml_file} "
+        "got: ['{TOML_FOLDER}/{TODAY}']\n"
+    )
+
+    # backup-folders missing:
+    with toml_file.open("w") as tfile:
+        tfile.write("target-location='{TOML_FOLDER}/{TODAY}'\n")
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert captured.err == f"Missing table 'backup-folders' in {toml_file}\n"
 
     # backup-folders not a table:
     with toml_file.open("w") as tfile:
@@ -612,7 +631,9 @@ def test_configuration_scheme_errors(
     with pytest.raises(SystemExit, match="1"):
         blue_backup.main(str(toml_file))
     captured = capsys.readouterr()
-    assert captured.err == "'backup-folders' must be a table.\n"
+    assert (
+        captured.err == f"Expected table for 'backup-folders' in {toml_file} got: 3\n"
+    )
 
     # Global exclude not an array:
     with toml_file.open("w") as tfile:
@@ -624,19 +645,10 @@ def test_configuration_scheme_errors(
     with pytest.raises(SystemExit, match="1"):
         blue_backup.main(str(toml_file))
     captured = capsys.readouterr()
-    assert captured.err == "Global 'exclude' must be an array.\n"
-
-    # Source folder exclude not an array:
-    with toml_file.open("w") as tfile:
-        tfile.write(
-            "target-location='{TOML_FOLDER}/{TODAY}'\n"
-            "[backup-folders]\n"
-            "'/my-folder'={exclude='exclude-me'}\n"
-        )
-    with pytest.raises(SystemExit, match="1"):
-        blue_backup.main(str(toml_file))
-    captured = capsys.readouterr()
-    assert captured.err == "'exclude' for '/my-folder' must be an array.\n"
+    assert (
+        captured.err ==
+        f"Expected array of strings for 'exclude' in {toml_file} got: exclude-me\n"
+    )
 
     # rsync-options not an array:
     with toml_file.open("w") as tfile:
@@ -648,19 +660,11 @@ def test_configuration_scheme_errors(
     with pytest.raises(SystemExit, match="1"):
         blue_backup.main(str(toml_file))
     captured = capsys.readouterr()
-    assert captured.err == "'rsync-options' must be an array.\n"
-
-    # Source folder rsync-options not an array:
-    with toml_file.open("w") as tfile:
-        tfile.write(
-            "target-location='{TOML_FOLDER}/{TODAY}'\n"
-            "[backup-folders]\n"
-            "'/my-folder'={rsync-options='--my-rsync-option'}\n"
-        )
-    with pytest.raises(SystemExit, match="1"):
-        blue_backup.main(str(toml_file))
-    captured = capsys.readouterr()
-    assert captured.err == "'rsync-options' for '/my-folder' must be an array.\n"
+    assert (
+        captured.err ==
+        f"Expected array of strings for 'rsync-options' in {toml_file} got: "
+        "--my-rsync-option\n"
+    )
 
     # Backup folder info not a table:
     with toml_file.open("w") as tfile:
@@ -672,7 +676,46 @@ def test_configuration_scheme_errors(
     with pytest.raises(SystemExit, match="1"):
         blue_backup.main(str(toml_file))
     captured = capsys.readouterr()
-    assert captured.err == "Folder info for '/to_backup' must be a table.\n"
+    assert captured.err == "Expected table for '/to_backup' in backup-folders got: 3\n"
+
+
+def test_source_folder_schema_errors(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test handling of errors in the source folder schema."""
+    toml_file = tmp_path / "blue.toml"
+
+    # Source folder exclude not an array:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='{TOML_FOLDER}/{TODAY}'\n"
+            "[backup-folders]\n"
+            "'/my-folder'={exclude='exclude-me'}\n"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert (
+        captured.err ==
+        "Expected array of strings for 'exclude' in /my-folder got: exclude-me\n"
+    )
+
+    # Source folder rsync-options not an array:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='{TOML_FOLDER}/{TODAY}'\n"
+            "[backup-folders]\n"
+            "'/my-folder'={rsync-options='--my-rsync-option'}\n"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert (
+        captured.err ==
+        "Expected array of strings for 'rsync-options' in /my-folder got: "
+        "--my-rsync-option\n"
+    )
 
 
 def test_configuration_errors(
@@ -766,9 +809,7 @@ def test_offsite_mode_errors(
     with pytest.raises(SystemExit, match="1"):
         blue_backup.main(str(toml_file))
     captured = capsys.readouterr()
-    assert (
-        captured.err == "Only one backup folder allowed in offsite mode.\n"
-    )
+    assert captured.err == "Only one backup folder allowed in offsite mode.\n"
 
     # No source folder with {LATEST} field in offsite mode:
     with toml_file.open("w") as tfile:

@@ -17,7 +17,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Iterator
-from typing import BinaryIO, Dict, List, Literal, Sequence, TypedDict, cast
+from typing import BinaryIO, Dict, Literal, Sequence, cast
 
 if sys.version_info >= (3, 11):
     from typing import Self
@@ -185,14 +185,49 @@ class Path(pathlib.Path):
         return type(self)(str_path)
 
 
-FolderInfo = TypedDict("FolderInfo", {
-    # Information in RHS of backup folder table.
-    "target": str,
-    "exclude": List[str],
-    "chown": str,
-    "chmod": str,
-    "rsync-options": List[str],
-}, total=False)
+class TOMLDict(Dict[str, object]):
+    """A python dict holding TOML table."""
+
+    def __init__(self, toml_dict: dict[str, object], name: str) -> None:
+        self.name = name
+        super().__init__(toml_dict)
+
+    def pop_table(self, name: str) -> Self:
+        """Pop a sub TOML table from TOML table."""
+        if name in self:
+            value = self.pop(name)
+            if isinstance(value, dict):
+                return self.__class__(value, name)
+            raise BlueError(f"Expected table for '{name}' in {self.name} got: {value}")
+        raise BlueError(f"Missing table '{name}' in {self.name}")
+
+    def pop_str_or_none(self, name: str) -> str | None:
+        """Pop a string from TOML table or return None."""
+        if name in self:
+            value = self.pop(name)
+            if isinstance(value, str):
+                return value
+            raise BlueError(f"Expected string for '{name}' in {self.name} got: {value}")
+        return None
+
+    def pop_str(self, name: str) -> str:
+        """Pop a string from TOML table."""
+        value = self.pop_str_or_none(name)
+        if value is None:
+            raise BlueError(f"Missing string '{name}' in {self.name}")
+        return value
+
+    def pop_array_of_str(self, name: str) -> list[str]:
+        """Pop a array of strings from TOML table or return an empty array."""
+        value = self.pop(name, [])
+        if (
+            isinstance(value, list) and
+            all(isinstance(sub_value, str) for sub_value in value)
+        ):
+            return value
+        raise BlueError(
+            f"Expected array of strings for '{name}' in {self.name} got: {value}"
+        )
 
 
 @dataclasses.dataclass
@@ -208,7 +243,7 @@ class BackupFolder:
     rsync_options: tuple[str, ...] = ()
 
     @classmethod
-    def from_toml(cls, source_location: str, folder_info: FolderInfo) -> Self:
+    def from_toml(cls, source_location: str, folder_info: TOMLDict) -> Self:
         """Generate folder from data in the TOML file."""
         if ":" in source_location:
             source_address, source_folder = source_location.split(":", 2)
@@ -218,10 +253,9 @@ class BackupFolder:
         if "TOML_FOLDER" not in str(source_path) and not source_path.is_absolute():
             raise BlueError(f"Source location '{source_path}' must be absolute path.")
 
-        if not isinstance(folder_info, dict):
-            raise BlueError(f"Folder info for '{source_location}' must be a table.")
-        if "target" in folder_info:
-            target_path = Path(folder_info.pop("target"))
+        target_str = folder_info.pop_str_or_none("target")
+        if isinstance(target_str, str):
+            target_path = Path(target_str)
         else:
             if source_folder == "{TOML_FOLDER}":
                 raise BlueError(
@@ -229,15 +263,11 @@ class BackupFolder:
                 )
             target_path = source_path.str_format(TOML_FOLDER="").relative_to("/")
 
-        exclude: list[str] = folder_info.pop("exclude", [])
-        if not isinstance(exclude, list):
-            raise BlueError(f"'exclude' for '{source_folder}' must be an array.")
+        exclude = folder_info.pop_array_of_str("exclude")
 
-        chown = folder_info.pop("chown", None)
-        chmod = folder_info.pop("chmod", None)
-        rsync_options: list[str] = folder_info.pop("rsync-options", [])
-        if not isinstance(rsync_options, list):
-            raise BlueError(f"'rsync-options' for '{source_folder}' must be an array.")
+        chown = folder_info.pop_str_or_none("chown")
+        chmod = folder_info.pop_str_or_none("chmod")
+        rsync_options = folder_info.pop_array_of_str("rsync-options")
 
         for key in folder_info:
             Logger.WARNING.print(f"Unknown field for '{source_location}': '{key}'")
@@ -296,17 +326,14 @@ class Config:
         """Create a Config class from a TOML file."""
         try:
             with pathlib.Path(filename).open(mode="rb") as toml_file:
-                toml_dict = tomllib.load(toml_file)
+                toml_dict = TOMLDict(tomllib.load(toml_file), filename)
         except (OSError, tomllib.TOMLDecodeError) as ex:
             raise BlueError(f"Failed to read '{filename}': {ex}") from ex
 
-        try:
-            target_location: str = toml_dict.pop("target-location")
-            backup_folders: dict[str, FolderInfo] = toml_dict.pop("backup-folders")
-        except KeyError as ex:
-            raise BlueError(f"Missing in '{filename}': {ex}") from ex
-        exclude: list[str] = toml_dict.pop("exclude", [])
-        rsync_options: list[str] = toml_dict.pop("rsync-options", [])
+        target_location = toml_dict.pop_str("target-location")
+        backup_folders = toml_dict.pop_table("backup-folders")
+        exclude = toml_dict.pop_array_of_str("exclude")
+        rsync_options = toml_dict.pop_array_of_str("rsync-options")
         for key in toml_dict:
             Logger.WARNING.print(f"Unknown field in '{filename}': '{key}'")
 
@@ -318,19 +345,12 @@ class Config:
         if "TOML_FOLDER" not in str(target_path) and not target_path.is_absolute():
             raise BlueError(f"Target location '{target_path}' must be absolute path.")
 
-        if isinstance(backup_folders, dict):
-            backup_folders_conf = tuple(
-                BackupFolder.from_toml(source_location, folder_info)
-                for source_location, folder_info in backup_folders.items()
+        backup_folders_conf = tuple(
+            BackupFolder.from_toml(
+                source_location, backup_folders.pop_table(source_location)
             )
-        else:
-            raise BlueError("'backup-folders' must be a table.")
-
-        if not isinstance(exclude, list):
-            raise BlueError("Global 'exclude' must be an array.")
-
-        if not isinstance(rsync_options, list):
-            raise BlueError("'rsync-options' must be an array.")
+            for source_location in list(backup_folders)
+        )
 
         config = cls(
             target_address, target_path, backup_folders_conf,
