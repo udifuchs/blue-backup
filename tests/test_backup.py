@@ -54,15 +54,24 @@ class FakeDatetime(datetime.datetime):
 
 datetime.datetime = FakeDatetime  # type: ignore[misc]
 
+# Remote tests use local address 127.0.0.1. Therefore, these tests will fail
+# to catch bugs of mixing between local and remote location.
+# Before running the test it is recommended to: ssh-copy-id 127.0.0.1
 
-def test_local(
+
+@pytest.mark.parametrize(("toml_config", "short_test"), [
+    ("blue-local.toml", False),
+    ("blue-remote-target.toml", True),
+    ("blue-remote-source.toml", True),
+])
+def test_basic_fs(
     tmp_path: pathlib.Path,
     capsys: pytest.CaptureFixture[str],
-    toml_config: str = "blue-local.toml",
+    toml_config: str,
     *,
-    short_test: bool = False,
+    short_test: bool,
 ) -> None:
-    """Test functionality for local backup."""
+    """Test backup functionality with basic file system (not btrfs)."""
     # The configuration file is copied so that TOML_FOLDER would point to tmp_path.
     toml_filename = str(tmp_path / toml_config)
     shutil.copy(f"tests/{toml_config}", toml_filename)
@@ -349,17 +358,21 @@ def test_btrfs_mount_point(tmp_path: pathlib.Path) -> None:
         pass
 
 
+@pytest.mark.parametrize(("toml_config", "short_test"), [
+    ("blue-local.toml", False),
+    ("blue-remote-target.toml", True),
+])
 def test_btrfs(
     tmp_path: pathlib.Path,
     capsys: pytest.CaptureFixture[str],
-    toml_config: str = "blue-local.toml",
+    toml_config: str,
     *,
-    short_test: bool = False,
+    short_test: bool,
 ) -> None:
     """Test backup to a btrfs target location."""
     with btrfs_mount_point(tmp_path) as mount_point:
         # Run the local test in the btrfs:
-        test_local(mount_point, capsys, toml_config, short_test=short_test)
+        test_basic_fs(mount_point, capsys, toml_config, short_test=short_test)
 
         (mount_point / "data-to-backup" / "new-file.txt").touch()
         # Fill up the btrfs with zeros:
@@ -399,42 +412,13 @@ def test_btrfs(
         )
 
 
-# Remote tests use local address 127.0.0.1. Therefore, these tests will fail
-# to catch bugs of mixing between local and remote location.
-# Before running the test it is recommended to: ssh-copy-id 127.0.0.1
-
-
-def test_remote_target(
-    tmp_path: pathlib.Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Test backup to a remote target location."""
-    test_local(tmp_path, capsys, "blue-remote-target.toml", short_test=True)
-
-
-def test_remote_btrfs_target(
-    tmp_path: pathlib.Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Test backup to a remote target location."""
-    test_btrfs(tmp_path, capsys, "blue-remote-target.toml", short_test=True)
-
-
-def test_remote_source(
-    tmp_path: pathlib.Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Test backup to a remote source location."""
-    test_local(tmp_path, capsys, "blue-remote-source.toml", short_test=True)
-
-
 def test_remote_target_and_source(
     tmp_path: pathlib.Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Test backup to a remote target and source location."""
     with pytest.raises(AssertionError) as exc_info:
-        test_local(
+        test_basic_fs(
             tmp_path, capsys, "blue-remote-target-and-source.toml", short_test=True
         )
     assert "The source and destination cannot both be remote." in str(exc_info.value)
