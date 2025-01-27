@@ -136,11 +136,16 @@ class Process:
 
     def iterdir_attr(self, path: pathlib.Path) -> Iterator[paramiko.SFTPAttributes]:
         """Yield SFTPAttributes objects of the folder content."""
-        if self.sftp is None:
-            for subpath in path.iterdir():
-                yield paramiko.SFTPAttributes.from_stat(subpath.stat(), subpath.name)
-        else:
-            yield from self.sftp.listdir_attr(str(path))
+        try:
+            if self.sftp is None:
+                for subpath in path.iterdir():
+                    yield paramiko.SFTPAttributes.from_stat(
+                        subpath.stat(), subpath.name
+                    )
+            else:
+                yield from self.sftp.listdir_attr(str(path))
+        except OSError as ex:
+            raise BlueError(str(ex)) from None
 
     def run(
         self, args: Sequence[str], *, force_local: bool = False
@@ -503,32 +508,32 @@ class BlueBackup:
                 f"Backup target: {self.config.get_full_path(self.target_folder)} "
                 f"at {self.now.timetz()}"
             )
+            self.indent = "    "
+
+            if self.mode is Mode.COLLECT:
+                # folder_list and target_is_btrfs are not used in COLLECT mode.
+                return
+
+            for path_attr in self.proc.iterdir_attr(self.config.target_path):
+                if path_attr.st_mode is not None and stat.S_ISDIR(path_attr.st_mode):
+                    try:
+                        date = datetime.date.fromisoformat(path_attr.filename)
+                        iso_date = date.isoformat()
+                        if path_attr.filename != iso_date:
+                            raise ValueError(f"{path_attr.filename} != {iso_date}")
+                    except ValueError as ex:
+                        self._print_warning(
+                            f"Folder {path_attr.filename}, non ISO date: {ex}"
+                        )
+                    else:
+                        folder_path = self.config.target_path / path_attr.filename
+                        self.folder_list.append(folder_path)
         except BlueError as ex:
+            self.indent = "    "
             raise BlueError(
                 "Error writing to target location "
                 f"'{self.config.get_target_location()}': {ex}"
             ) from ex
-        finally:
-            self.indent = "    "
-
-        if self.mode is Mode.COLLECT:
-            # folder_list and target_is_btrfs are not used in COLLECT mode.
-            return
-
-        for path_attr in self.proc.iterdir_attr(self.config.target_path):
-            if path_attr.st_mode is not None and stat.S_ISDIR(path_attr.st_mode):
-                try:
-                    date = datetime.date.fromisoformat(path_attr.filename)
-                    iso_date = date.isoformat()
-                    if path_attr.filename != iso_date:
-                        raise ValueError(f"{path_attr.filename} != {iso_date}")
-                except ValueError as ex:
-                    self._print_warning(
-                        f"Folder {path_attr.filename}, non ISO date: {ex}"
-                    )
-                else:
-                    folder_path = self.config.target_path / path_attr.filename
-                    self.folder_list.append(folder_path)
 
         # Call proc.run() directly because we never want a dry_run here.
         proc = self.proc.run([

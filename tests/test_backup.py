@@ -740,6 +740,26 @@ def test_configuration_errors(
         "Failed connecting to 256.256.256.256: [Errno -2] Name or service not known\n"
     )
 
+    # Wrong target location in --dry-run mode raises exception differently:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='{TOML_FOLDER}/no-such-folder/{TODAY}'\n"
+            "[backup-folders]\n"
+            "'{TOML_FOLDER}'={target='target'}\n"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main("--dry-run", str(toml_file))
+    captured = capsys.readouterr()
+    assert (
+        captured.out ==
+        f"Backup target: {tmp_path}/no-such-folder/1999-12-25 at 00:00:00+00:00\n"
+    )
+    assert (
+        captured.err ==
+        f"    Error writing to target location '{tmp_path}/no-such-folder': "
+        f"[Errno 2] No such file or directory: '{tmp_path}/no-such-folder'\n"
+    )
+
     # Source location not absolute path:
     with toml_file.open("w") as tfile:
         tfile.write(
