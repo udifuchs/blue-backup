@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import datetime
 import getpass
-import importlib
 import os
 import pathlib
 import re
@@ -19,15 +18,10 @@ if sys.version_info >= (3, 11):
 else:  # Avoid depending on typing-extensions
     Self = None
 
+# import test/blue_backup.py which is a softlink to blue-backup:
 import pytest
 
-# blue-backup requires special import because of hyphen in name and not ending in .py:
-loader = importlib.machinery.SourceFileLoader("blue_backup", "./blue-backup")
-spec = importlib.util.spec_from_loader("blue_backup", loader)
-assert spec is not None
-blue_backup = importlib.util.module_from_spec(spec)
-sys.modules["blue_backup"] = blue_backup
-loader.exec_module(blue_backup)
+from . import blue_backup
 
 # Select first fake date to test accumulation of monthly backups:
 FIRST_FAKE_DATE = 1999, 12, 25
@@ -470,16 +464,16 @@ def test_collect_mode(
 def test_process_class(monkeypatch: pytest.MonkeyPatch) -> None:
     """Direct tests of the Process class."""
     monkeypatch.setattr(getpass, "getpass", lambda _prompt: "wrong-password")
-    with pytest.raises(blue_backup.BlueError) as exc_info:
+    with pytest.raises(blue_backup.BlueError) as blue_exc:
         blue_backup.Process("no-such-user@127.0.0.1")
     assert (
-        str(exc_info.value) == "Failed connecting to 127.0.0.1: Authentication failed."
+        str(blue_exc.value) == "Failed connecting to 127.0.0.1: Authentication failed."
     )
 
     proc = blue_backup.Process(address=None)
-    with pytest.raises(blue_backup.BlueError) as exc_info:
-        proc.open(pathlib.Path("/no-such-file"), "r")
-    assert str(exc_info.value) == "File '/no-such-file' must be opened in binary mode"
+    with pytest.raises(blue_backup.BlueError) as blue_exc:
+        proc.open(pathlib.Path("/no-such-file"), "r")  # type: ignore[arg-type]
+    assert str(blue_exc.value) == "File '/no-such-file' must be opened in binary mode"
 
     with pytest.raises(FileNotFoundError) as exc_info:
         proc.open(pathlib.Path("/no-such-file"), "rb")
@@ -890,7 +884,7 @@ def test_rsync_timeout(
 
     save_rsync_timeout = blue_backup.RSYNC_TIMEOUT
     try:
-        blue_backup.RSYNC_TIMEOUT = 1  # type: ignore[attr-defined]
+        blue_backup.RSYNC_TIMEOUT = 1
         with toml_file.open("w") as tfile:
             tfile.write(
                 "target-location='127.0.0.1:{TOML_FOLDER}/{TODAY}'\n"
@@ -904,4 +898,4 @@ def test_rsync_timeout(
         assert "    rsync error: timeout in data send/receive (code 30)" in captured.err
         assert "    Return code: 30" in captured.err
     finally:
-        blue_backup.RSYNC_TIMEOUT = save_rsync_timeout  # type: ignore[attr-defined]
+        blue_backup.RSYNC_TIMEOUT = save_rsync_timeout

@@ -88,7 +88,7 @@ class Logger(enum.Enum):
 
 
 @contextlib.contextmanager
-def lock_file(filename: str) -> Iterator[BinaryIO]:
+def lock_file(filename: pathlib.Path | str) -> Iterator[BinaryIO]:
     """Create an exclusive lock on an existing file."""
     with pathlib.Path(filename).open("rb") as flock_file:
         try:
