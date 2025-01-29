@@ -261,11 +261,9 @@ class BackupFolder:
         target_str = folder_info.pop_str_or_none("target")
         if isinstance(target_str, str):
             target_path = Path(target_str)
+        elif str(source_path) == "{TOML_FOLDER}":
+            target_path = Path(".")
         else:
-            if source_folder == "{TOML_FOLDER}":
-                raise BlueError(
-                    f"Source location '{source_folder}' requires target path."
-                )
             target_path = source_path.str_format(TOML_FOLDER="").relative_to("/")
 
         exclude = folder_info.pop_array_of_str("exclude")

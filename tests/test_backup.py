@@ -772,18 +772,6 @@ def test_configuration_errors(
     captured = capsys.readouterr()
     assert captured.err == "Source location 'bla-bla-bla' must be absolute path.\n"
 
-    # Source location {TOML_FOLDER} requires a target:
-    with toml_file.open("w") as tfile:
-        tfile.write(
-            "target-location='{TOML_FOLDER}/{TODAY}'\n"
-            "[backup-folders]\n"
-            "'{TOML_FOLDER}'={}\n"
-        )
-    with pytest.raises(SystemExit, match="1"):
-        blue_backup.main(str(toml_file))
-    captured = capsys.readouterr()
-    assert captured.err == "Source location '{TOML_FOLDER}' requires target path.\n"
-
     # Missing permissions to TOML file:
     toml_file.chmod(0)
     with pytest.raises(SystemExit, match="1"):
@@ -793,6 +781,38 @@ def test_configuration_errors(
         captured.err ==
         f"Failed to read '{toml_file}': [Errno 13] Permission denied: '{toml_file}'\n"
     )
+
+
+def test_backup_summary(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test content of backup summary output table."""
+    toml_file = tmp_path / "blue.toml"
+
+    # Summary should be shown even with rsync errors:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='{TOML_FOLDER}/{TODAY}'\n"
+            "[backup-folders]\n"
+            "'{TOML_FOLDER}/no-such-folder'={}\n"
+        )
+    blue_backup.main("--first-time", str(toml_file))
+    captured = capsys.readouterr()
+    assert f"{tmp_path}/no-such-folder/ | " in captured.out
+    assert captured.err.startswith(f"    Errors for: {tmp_path}/no-such-folder/\n")
+
+    # Source location '{TOML_FOLDER}' uses a different source code path:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='{TOML_FOLDER}/{TODAY}'\n"
+            "[backup-folders]\n"
+            "'{TOML_FOLDER}'={}\n"
+        )
+    blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert f"{tmp_path}/ | " in captured.out
+    assert captured.err.startswith("")
 
 
 def test_offsite_mode_errors(
