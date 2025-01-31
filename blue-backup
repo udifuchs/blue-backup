@@ -617,10 +617,14 @@ class BlueBackup:
             "Total transferred file size: ": "trans_size",
         }
         return {
-            token_name: line.split(": ")[1].split(" ")[0]
-            for line in output.decode("utf8").split("\n")
-            for line_header, token_name in keep_rules.items()
-            if line.startswith(line_header)
+            token_name: next(
+                (
+                    line.split(": ")[1].split(" ")[0]
+                    for line in output.decode("utf8").split("\n")
+                    if line.startswith(line_header)
+                ),
+                ""  # Default to "" if line_header is missing in output.
+            ) for line_header, token_name in keep_rules.items()
         }
 
     def _print_rsync_summary(self, summary: dict[str, dict[str, str]]) -> None:
@@ -717,10 +721,9 @@ class BlueBackup:
                     )
                     self._print_error(str(ProcessError(proc)))
                 stats = self._filter_rsync_output(proc.stdout)
-                if stats:
-                    delta_seconds = round(time.time() - start_time)
-                    stats["time"] = str(datetime.timedelta(seconds=delta_seconds))
-                    backup_stats[target_str] = stats
+                delta_seconds = round(time.time() - start_time)
+                stats["time"] = str(datetime.timedelta(seconds=delta_seconds))
+                backup_stats[target_str] = stats
 
         self._print_rsync_summary(backup_stats)
 

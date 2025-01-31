@@ -106,7 +106,8 @@ def test_basic_fs(
         f"Backup target: 127.0.0.1:{tmp_path}/target/" in captured.out
     )
     if toml_config == "blue-remote-target-and-source.toml":
-        assert "    local | " in captured.out
+        assert "    local  | " in captured.out
+        assert "    remote | " in captured.out
     else:
         assert "    data-to-backup | " in captured.out
     assert "Kept backups: 1 monthly, 0 daily" in captured.out
