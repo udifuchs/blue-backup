@@ -628,11 +628,14 @@ class BlueBackup:
         if not summary:
             return
         header = {
-            "source_folder_str": "Source", "time": "Time",
-            "files": "Total files", "files_size": "bytes",
-            "trans": "Transferred", "trans_size": "bytes"
+            "target_str": "Target",
+            "files": "Total files",
+            "files_size": "bytes",
+            "trans": "Transferred",
+            "trans_size": "bytes",
+            "time": "Time",
         }
-        max_source = max(len(source_folder_str) for source_folder_str in summary)
+        max_target = max(len(target_str) for target_str in summary)
         max_files = max(len(stats["files"]) for stats in (*summary.values(), header))
         max_files_size = max(
             len(stats["files_size"]) for stats in (*summary.values(), header)
@@ -643,7 +646,7 @@ class BlueBackup:
         )
         max_time = max(len(stats["time"]) for stats in (*summary.values(), header))
         out_format = (
-            f"{{source_folder_str: <{max_source}}} | "
+            f"{{target_str: <{max_target}}} | "
             f"{{files: >{max_files}}} / {{files_size: >{max_files_size}}} | "
             f"{{trans: >{max_trans}}} / {{trans_size: >{max_trans_size}}} | "
             f"{{time: >{max_time}}}"
@@ -653,15 +656,13 @@ class BlueBackup:
         # Print table separator:
         self._print_output(
             out_format.replace(" ", "-").replace("/", "-").replace("|", "+").format(
-                source_folder_str="",
+                target_str="",
                 files="", files_size="",
                 trans="", trans_size="", time=""
             )
         )
-        for source_folder_str, stats in summary.items():
-            self._print_output(
-                out_format.format(source_folder_str=source_folder_str, **stats)
-            )
+        for target_str, stats in summary.items():
+            self._print_output(out_format.format(target_str=target_str, **stats))
 
     def backup(self) -> None:
         """Perform the actual backup."""
@@ -685,7 +686,7 @@ class BlueBackup:
         backup_stats: dict[str, dict[str, str]] = {}
         for backup_folder in self.config.backup_folders:
             start_time = time.time()
-            source_folder_str = backup_folder.get_source_location()
+            source_str = backup_folder.get_source_location()
             # str(path / "_")[:-1] is to ensure that path ends with a "/".
             backup_target_str = str(
                 self.target_folder / backup_folder.target_path / "_"
@@ -704,19 +705,22 @@ class BlueBackup:
                     f"--exclude={folder}"
                     for folder in self.config.exclude + backup_folder.exclude
                 ),
-                source_folder_str,
+                source_str,
                 backup_target_str,
                 force_local=True,
             )
             if proc is not None:
+                target_str = str(backup_folder.target_path)
                 if len(proc.stderr) > 0 or proc.returncode != 0:
-                    self._print_error(f"Errors for: {source_folder_str}")
+                    self._print_error(
+                        f"Errors in rsync from: {source_str} to: {target_str}"
+                    )
                     self._print_error(str(ProcessError(proc)))
                 stats = self._filter_rsync_output(proc.stdout)
                 if stats:
                     delta_seconds = round(time.time() - start_time)
                     stats["time"] = str(datetime.timedelta(seconds=delta_seconds))
-                    backup_stats[source_folder_str] = stats
+                    backup_stats[target_str] = stats
 
         self._print_rsync_summary(backup_stats)
 

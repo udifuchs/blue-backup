@@ -105,10 +105,10 @@ def test_basic_fs(
         f"Backup target: {tmp_path}/target/" in captured.out or
         f"Backup target: 127.0.0.1:{tmp_path}/target/" in captured.out
     )
-    assert (
-        f"{tmp_path}/data-to-backup/" in captured.out or
-        f"127.0.0.1:{tmp_path}/data-to-backup/" in captured.out
-    )
+    if toml_config == "blue-remote-target-and-source.toml":
+        assert "    local | " in captured.out
+    else:
+        assert "    data-to-backup | " in captured.out
     assert "Kept backups: 1 monthly, 0 daily" in captured.out
     assert captured.err == ""
 
@@ -793,8 +793,10 @@ def test_backup_summary(
         )
     blue_backup.main("--first-time", str(toml_file))
     captured = capsys.readouterr()
-    assert f"{tmp_path}/no-such-folder/ | " in captured.out
-    assert captured.err.startswith(f"    Errors for: {tmp_path}/no-such-folder/\n")
+    assert "    no-such-folder | " in captured.out
+    assert captured.err.startswith(
+        f"    Errors in rsync from: {tmp_path}/no-such-folder/ to: no-such-folder\n"
+    )
 
     # Source location '{TOML_FOLDER}' uses a different source code path:
     with toml_file.open("w") as tfile:
@@ -805,7 +807,7 @@ def test_backup_summary(
         )
     blue_backup.main(str(toml_file))
     captured = capsys.readouterr()
-    assert f"{tmp_path}/ | " in captured.out
+    assert "    . | " in captured.out
     assert captured.err.startswith("")
 
 
