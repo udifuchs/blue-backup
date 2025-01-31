@@ -8,6 +8,7 @@ import getpass
 import os
 import pathlib
 import re
+import runpy
 import shutil
 import subprocess
 import sys
@@ -35,14 +36,12 @@ class FakeDatetime(datetime.datetime):
     @classmethod
     def now(cls, tz: datetime.tzinfo | None = None) -> Self:
         """Mock today's date."""
-        if tz is None:
-            tz = datetime.timezone.utc
+        tz = datetime.timezone.utc
         return cls(*FakeDatetime.fake_today, tzinfo=tz)
 
     def astimezone(self, tz: datetime.tzinfo | None = None) -> Self:
-        """Set system time zone to UTC for consistent test output."""
-        if tz is None:
-            tz = datetime.timezone.utc
+        """Force time zone to UTC for consistent test output."""
+        tz = datetime.timezone.utc
         return super().astimezone(tz=tz)
 
 
@@ -498,9 +497,9 @@ def test_lock_file(
 
     # Fail locking the same lock file twice:
     with blue_backup.lock_file(lock_file):
-        with pytest.raises(blue_backup.BlueError) as block_exc, \
-             blue_backup.lock_file(lock_file):
-            pass
+        with pytest.raises(blue_backup.BlueError) as block_exc:
+            lock = blue_backup.lock_file(lock_file)
+            lock.__enter__()
         assert (
             str(block_exc.value) ==
             f"Failed locking {lock_file}: [Errno 11] Resource temporarily unavailable"
@@ -509,9 +508,9 @@ def test_lock_file(
     # Fail if we have no access to the lock file:
     lock_file_mode = lock_file.stat().st_mode
     lock_file.chmod(0)
-    with pytest.raises(PermissionError) as exc_info, \
-         blue_backup.lock_file(lock_file):
-        pass
+    with pytest.raises(PermissionError) as exc_info:
+        lock = blue_backup.lock_file(lock_file)
+        lock.__enter__()
     assert str(exc_info.value) == f"[Errno 13] Permission denied: '{lock_file}'"
     lock_file.chmod(lock_file_mode)
 
@@ -902,3 +901,35 @@ def test_rsync_timeout(
         assert "    Return code: 30" in captured.err
     finally:
         blue_backup.RSYNC_TIMEOUT = save_rsync_timeout
+
+
+def test_terminal_output(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test color output on a mocked terminal output."""
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main("no-such-file.toml")
+    captured = capsys.readouterr()
+    assert (
+        captured.err ==
+        f"{blue_backup.Logger.ERROR.value}"
+        "Failed to read 'no-such-file.toml': "
+        "[Errno 2] No such file or directory: 'no-such-file.toml'"
+        f"{blue_backup.Logger['_RESET'].value}\n"
+    )
+    assert captured.out == ""
+
+
+def test_main_entry_point(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test the __name__ == "__main__" entry point."""
+    monkeypatch.setattr(sys, "argv", ["", "--help"])
+    with pytest.raises(SystemExit, match="0"):
+        runpy.run_module("tests.blue_backup", run_name="__main__", alter_sys=True)
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out.startswith("usage: blue_backup.py [-h]")

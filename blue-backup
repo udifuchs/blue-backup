@@ -538,7 +538,8 @@ class BlueBackup:
             "/usr/bin/stat", "--file-system", "--format=%T",
             str(self.config.target_path),
         ])
-        if len(proc.stderr) > 0 or proc.returncode != 0:
+        # Check for errors even though /usr/bin/stat should never fail here.
+        if len(proc.stderr) > 0 or proc.returncode != 0:  # pragma: no cover
             raise ProcessError(proc)
         str_out = proc.stdout.decode("utf8").strip()  # Remove any newlines.
         self.target_is_btrfs = str_out == "btrfs"
@@ -764,7 +765,8 @@ class BlueBackup:
         )
         if proc is not None:
             str_out = proc.stdout.decode("utf8")
-            if len(proc.stderr) > 0 or proc.returncode != 0:
+            # Check for errors even though /usr/bin/df should never fail here.
+            if len(proc.stderr) > 0 or proc.returncode != 0:  # pragma: no cover
                 raise ProcessError(proc)
             # Output of /usr/bin/df:
             # Filesystem      Size  Used Avail Use% Mounted on
