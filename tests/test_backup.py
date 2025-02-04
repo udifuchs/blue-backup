@@ -101,8 +101,8 @@ def test_basic_fs(
     blue_backup.main("--first-time", toml_filename)
     captured = capsys.readouterr()
     assert (
-        f"Backup target: {tmp_path}/target/" in captured.out or
-        f"Backup target: 127.0.0.1:{tmp_path}/target/" in captured.out
+        f"Backup snapshot target: {tmp_path}/target/" in captured.out or
+        f"Backup snapshot target: 127.0.0.1:{tmp_path}/target/" in captured.out
     )
     if toml_config == "blue-remote-target-and-source.toml":
         assert "    local  | " in captured.out
@@ -136,8 +136,10 @@ def test_basic_fs(
     blue_backup.main(toml_filename, "--verbose")
     captured = capsys.readouterr()
     assert (
-        captured.out.startswith(f"Backup target: {target_path}/{today}") or
-        captured.out.startswith(f"Backup target: 127.0.0.1:{target_path}/{today}")
+        captured.out.startswith(f"Backup snapshot target: {target_path}/{today}") or
+        captured.out.startswith(
+            f"Backup snapshot target: 127.0.0.1:{target_path}/{today}"
+        )
     )
     assert "/usr/bin/rsync" in captured.out
     assert "Kept backups: 1 monthly, 0 daily" in captured.out
@@ -174,10 +176,22 @@ def subtest_offsite_mode(
         "specify --first-time\n"
     )
 
-    blue_backup.main(str(toml_file), "--first-time", "--verbose")
+    blue_backup.main(str(toml_file), "--first-time")
     captured = capsys.readouterr()
     assert captured.err == ""
     today = str(datetime.datetime.now().astimezone().date())
+    assert captured.out.startswith(
+        f"Backup offsite target: {offsite_path / today} at 00:00:00+00:00"
+    )
+    target_str = f"{target_path / today}/"
+    assert (
+        f"    {'Source'.ljust(len(target_str))} | "
+        "Total files / bytes | Transferred / bytes |    Time\n"
+        f"    {'------'.ljust(len(target_str), '-')}-+-"
+        "--------------------+---------------------+--------\n"
+        f"    {target_str} |           3 /    12 |           1 /    12 | 0:00:00\n"
+        in captured.out
+    )
     # Check that file-1.txt was backed up:
     assert (offsite_path / f"{today}.log").exists()
     assert (offsite_path / today / "data-to-backup" / "file-1.txt").exists()
@@ -188,7 +202,7 @@ def subtest_offsite_mode(
         f.write("added line\n")
 
     # Test second run:
-    blue_backup.main(str(toml_file), "--verbose")
+    blue_backup.main(str(toml_file))
     captured = capsys.readouterr()
     assert captured.err == ""
     # Check that file-1.txt was backed up:
@@ -454,6 +468,9 @@ def test_collect_mode(
     blue_backup.main(str(toml_file))
     captured = capsys.readouterr()
     assert captured.err == ""
+    assert captured.out.startswith(
+        f"Backup collect target: {collect_path} at 00:00:00+00:00"
+    )
     assert (collect_path / "blue-backup.log").exists()
     assert (collect_path / "local").exists()
     assert (collect_path / "remote").exists()
@@ -726,7 +743,8 @@ def test_configuration_errors(
         blue_backup.main(str(toml_file))
     captured = capsys.readouterr()
     assert (
-        captured.out == "Backup target: 256.256.256.256:/1999-12-25 at 00:00:00+00:00\n"
+        captured.out ==
+        "Backup snapshot target: 256.256.256.256:/1999-12-25 at 00:00:00+00:00\n"
     )
     assert (
         captured.err ==
@@ -746,7 +764,8 @@ def test_configuration_errors(
     captured = capsys.readouterr()
     assert (
         captured.out ==
-        f"Backup target: {tmp_path}/no-such-folder/1999-12-25 at 00:00:00+00:00\n"
+        "Backup snapshot target: "
+        f"{tmp_path}/no-such-folder/1999-12-25 at 00:00:00+00:00\n"
     )
     assert (
         captured.err ==
@@ -807,7 +826,7 @@ def test_backup_summary(
         )
     blue_backup.main(str(toml_file))
     captured = capsys.readouterr()
-    assert "    . | " in captured.out
+    assert "    .      | " in captured.out
     assert captured.err.startswith("")
 
 

@@ -385,10 +385,10 @@ class Config:
 
 
 class Mode(enum.Enum):
-    """Backup mode derived from target folder form."""
-    BACKUP = 0  # Daily backup with date label.
-    COLLECT = 1  # Collect backups to central location.
-    OFFSITE = 2  # Create offsite copy of main daily backup.
+    """Backup mode as derived from target folder form in the TOML configuration."""
+    SNAPSHOT = "snapshot"  # Snapshot backup with date label.
+    COLLECT = "collect"  # Collect backups to central location.
+    OFFSITE = "offsite"  # Create offsite copy of main daily backup.
 
 
 @dataclasses.dataclass
@@ -407,7 +407,7 @@ class BlueBackup:
         today = self.now.date()
 
         if "{TODAY}" in str(self.config.target_path):
-            self.mode = Mode.BACKUP
+            self.mode = Mode.SNAPSHOT
             self.target_folder = self.config.target_path.str_format(TODAY=str(today))
             self.config.target_path = self.config.target_path.str_format(TODAY="")
             self.log_file = self.target_folder.with_suffix(".log")
@@ -503,7 +503,8 @@ class BlueBackup:
         """Initialize the backup."""
         try:
             self._print_output(
-                f"Backup target: {self.config.get_full_path(self.target_folder)} "
+                f"Backup {self.mode.value} target: "
+                f"{self.config.get_full_path(self.target_folder)} "
                 f"at {self.now.timetz()}"
             )
             self.indent = "    "
@@ -633,14 +634,16 @@ class BlueBackup:
         if not summary:
             return
         header = {
-            "target_str": "Target",
+            "folder_str": "Source" if self.mode is Mode.OFFSITE else "Target",
             "files": "Total files",
             "files_size": "bytes",
             "trans": "Transferred",
             "trans_size": "bytes",
             "time": "Time",
         }
-        max_target = max(len(target_str) for target_str in summary)
+        max_folder = max(
+            len(folder_str) for folder_str in (*summary.keys(), header["folder_str"])
+        )
         max_files = max(len(stats["files"]) for stats in (*summary.values(), header))
         max_files_size = max(
             len(stats["files_size"]) for stats in (*summary.values(), header)
@@ -651,7 +654,7 @@ class BlueBackup:
         )
         max_time = max(len(stats["time"]) for stats in (*summary.values(), header))
         out_format = (
-            f"{{target_str: <{max_target}}} | "
+            f"{{folder_str: <{max_folder}}} | "
             f"{{files: >{max_files}}} / {{files_size: >{max_files_size}}} | "
             f"{{trans: >{max_trans}}} / {{trans_size: >{max_trans_size}}} | "
             f"{{time: >{max_time}}}"
@@ -661,13 +664,13 @@ class BlueBackup:
         # Print table separator:
         self._print_output(
             out_format.replace(" ", "-").replace("/", "-").replace("|", "+").format(
-                target_str="",
+                folder_str="",
                 files="", files_size="",
                 trans="", trans_size="", time=""
             )
         )
-        for target_str, stats in summary.items():
-            self._print_output(out_format.format(target_str=target_str, **stats))
+        for folder_str, stats in summary.items():
+            self._print_output(out_format.format(folder_str=folder_str, **stats))
 
     def backup(self) -> None:
         """Perform the actual backup."""
@@ -724,7 +727,8 @@ class BlueBackup:
                 stats = self._filter_rsync_output(proc.stdout)
                 delta_seconds = round(time.time() - start_time)
                 stats["time"] = str(datetime.timedelta(seconds=delta_seconds))
-                backup_stats[target_str] = stats
+                folder_str = source_str if self.mode is Mode.OFFSITE else target_str
+                backup_stats[folder_str] = stats
 
         self._print_rsync_summary(backup_stats)
 
