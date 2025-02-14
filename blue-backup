@@ -125,10 +125,10 @@ class Process:
             try:
                 try:
                     self.ssh.connect(hostname, username=username)
-                except paramiko.ssh_exception.AuthenticationException:
+                except paramiko.AuthenticationException:
                     password = getpass.getpass(f"{self.address} password:")
                     self.ssh.connect(hostname, username=username, password=password)
-            except (OSError, paramiko.ssh_exception.SSHException) as ex:
+            except (OSError, paramiko.SSHException) as ex:
                 raise ProcessConnectionError(hostname) from ex
             finally:
                 del password
@@ -451,7 +451,7 @@ class BlueBackup:
             try:
                 with self.proc.open(self.log_file, mode="ab") as log_file:
                     log_file.write(f"{text}\n".encode())
-            except (OSError, paramiko.ssh_exception.SSHException) as ex:
+            except (OSError, paramiko.SSHException) as ex:
                 log_full_path = self.config.get_full_path(self.log_file)
                 raise BlueError(f"Error writing to '{log_full_path}': {ex}") from ex
 
