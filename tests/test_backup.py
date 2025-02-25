@@ -480,11 +480,22 @@ def test_collect_mode(
 
 def test_process_class(monkeypatch: pytest.MonkeyPatch) -> None:
     """Direct tests of the Process class."""
+    # Test getting password when connected to terminal:
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(getpass, "getpass", lambda _prompt: "wrong-password")
     with pytest.raises(blue_backup.BlueError) as blue_exc:
         blue_backup.Process("no-such-user@127.0.0.1")
     assert (
         str(blue_exc.value) == "Failed connecting to 127.0.0.1: Authentication failed."
+    )
+
+    # Test getting password when not connected to terminal:
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    with pytest.raises(blue_backup.BlueError) as blue_exc:
+        blue_backup.Process("no-such-user@127.0.0.1")
+    assert (
+        str(blue_exc.value) ==
+        "Failed connecting to 127.0.0.1: No terminal. Cannot get password."
     )
 
     proc = blue_backup.Process(address=None)

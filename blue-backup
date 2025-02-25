@@ -126,9 +126,16 @@ class Process:
                 try:
                     self.ssh.connect(hostname, username=username)
                 except paramiko.AuthenticationException:
+                    if not sys.stdin.isatty():
+                        raise OSError("No terminal. Cannot get password.") from None
                     password = getpass.getpass(f"{self.address} password:")
                     self.ssh.connect(hostname, username=username, password=password)
-            except (OSError, paramiko.SSHException) as ex:
+            except (
+                # [Errno -2] Name or service not known
+                OSError,
+                # paramiko.ssh_exception.AuthenticationException: Authentication failed.
+                paramiko.SSHException,
+            ) as ex:
                 raise ProcessConnectionError(hostname) from ex
             finally:
                 del password
