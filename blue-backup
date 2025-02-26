@@ -262,7 +262,10 @@ class BackupFolder:
         else:
             source_address, source_folder = None, source_location
         source_path = Path(source_folder)
-        if "TOML_FOLDER" not in str(source_path) and not source_path.is_absolute():
+        if (
+            not source_folder.startswith("{TOML_FOLDER}") and
+            not source_path.is_absolute()
+        ):
             raise BlueError(f"Source location '{source_path}' must be absolute path.")
 
         target_str = folder_info.pop_str_or_none("target")
@@ -352,7 +355,10 @@ class Config:
         if ":" in target_location:
             target_address, target_location = target_location.split(":", 2)
         target_path = Path(target_location)
-        if "TOML_FOLDER" not in str(target_path) and not target_path.is_absolute():
+        if (
+            not target_location.startswith("{TOML_FOLDER}") and
+            not target_path.is_absolute()
+        ):
             raise BlueError(f"Target location '{target_path}' must be absolute path.")
 
         backup_folders_conf = tuple(
@@ -375,7 +381,6 @@ class Config:
         self.target_path = self.target_path.str_format(**kwargs)
         for bf in self.backup_folders:
             bf.source_path = bf.source_path.str_format(**kwargs)
-            bf.target_path = bf.target_path.str_format(**kwargs)
 
     def get_full_path(self, local_path: Path | str) -> str:
         """Return full path including host address in remote mode."""
@@ -439,6 +444,12 @@ class BlueBackup:
             self.mode = Mode.COLLECT
             self.target_folder = self.config.target_path
             self.log_file = self.target_folder / "blue-backup.log"
+            for backup_folder in self.config.backup_folders:
+                if len(backup_folder.target_path.parts) > 1:
+                    raise BlueError(
+                        f"Folder structure '{backup_folder.target_path}' "
+                        "not allowed in collect mode."
+                    )
             if self.first_time:
                 raise BlueError("--first-time cannot be specified in collect mode.")
 
@@ -692,11 +703,6 @@ class BlueBackup:
             "--mkpath",
             *self.config.rsync_options
         ]
-        if self.proc.ssh is None:
-            rsync_command.append(f"--log-file={self.log_file}")
-        else:
-            # Log to file on the remote (receiver) side:
-            rsync_command.append(f"--remote-option=--log-file={self.log_file}")
 
         backup_stats: dict[str, dict[str, str]] = {}
         for backup_folder in self.config.backup_folders:
@@ -707,12 +713,29 @@ class BlueBackup:
                 self.target_folder / backup_folder.target_path / "_"
             )[:-1]
             backup_target_str = self.config.get_full_path(backup_target_str)
+
             rsync_folder_command = list(rsync_command)
             if backup_folder.chown is not None:
                 rsync_folder_command.append(f"--chown={backup_folder.chown}")
             if backup_folder.chmod is not None:
                 rsync_folder_command.append(f"--chmod={backup_folder.chmod}")
             rsync_folder_command += backup_folder.rsync_options
+
+            if self.mode is Mode.COLLECT:
+                # Keep a log file for each source folder.
+                # Log files are appended to, so they will keep growing.
+                rsync_log_file = (
+                    self.target_folder / backup_folder.target_path
+                ).with_suffix(".log")
+            else:
+                rsync_log_file = self.log_file
+            if self.proc.ssh is None:
+                rsync_folder_command.append(f"--log-file={rsync_log_file}")
+            else:
+                # Log to file on the remote (receiver) side:
+                rsync_folder_command.append(
+                    f"--remote-option=--log-file={rsync_log_file}"
+                )
 
             proc = self._run_return_proc(
                 *rsync_folder_command,

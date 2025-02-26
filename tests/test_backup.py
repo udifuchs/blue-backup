@@ -473,7 +473,9 @@ def test_collect_mode(
     )
     assert (collect_path / "blue-backup.log").exists()
     assert (collect_path / "local").exists()
+    assert (collect_path / "local.log").exists()
     assert (collect_path / "remote").exists()
+    assert (collect_path / "remote.log").exists()
     for file_path in (collect_path / "remote").iterdir():
         assert file_path.stat().st_mode & 0o777 == 0o707
 
@@ -795,6 +797,20 @@ def test_configuration_errors(
         blue_backup.main(str(toml_file))
     captured = capsys.readouterr()
     assert captured.err == "Source location 'bla-bla-bla' must be absolute path.\n"
+
+    # Backup folder target cannot be a folder structure in collect mode:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='{TOML_FOLDER}'\n"
+            "[backup-folders]\n"
+            "'/bla-bla/bla'={}\n"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert (
+        captured.err == "Folder structure 'bla-bla/bla' not allowed in collect mode.\n"
+    )
 
     # Missing permissions to TOML file:
     toml_file.chmod(0)
