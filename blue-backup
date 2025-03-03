@@ -436,10 +436,9 @@ class BlueBackup:
             if self.first_time:
                 raise BlueError("--first-time cannot be specified in collect mode.")
 
-        self.target_folder = self.config.target_path
         self.log_file = (
             None if self.mode is Mode.COLLECT
-            else self.target_folder.with_suffix(".log")
+            else self.config.target_path.with_suffix(".log")
         )
         self.indent = ""
         self.folder_list: list[pathlib.Path] = []
@@ -510,7 +509,7 @@ class BlueBackup:
         try:
             self._print_output(
                 f"Backup {self.mode.value} target: "
-                f"{self.config.get_full_path(self.target_folder)} "
+                f"{self.config.get_full_path(self.config.target_path)} "
                 f"at {self.now.timetz()}"
             )
         finally:
@@ -551,7 +550,8 @@ class BlueBackup:
         if self.mode is Mode.COLLECT:
             return
 
-        new_day = self.target_folder not in self.folder_list
+        target_folder = self.config.target_path
+        new_day = target_folder not in self.folder_list
 
         if self.first_time:
             if len(self.folder_list) > 0:
@@ -560,10 +560,10 @@ class BlueBackup:
                     "remove --first-time"
                 )
             if self.target_is_btrfs:
-                self._run("/usr/bin/btrfs", "subvolume", "create", self.target_folder)
+                self._run("/usr/bin/btrfs", "subvolume", "create", target_folder)
             else:
-                self._run("/usr/bin/mkdir", self.target_folder)
-            self.folder_list.append(self.target_folder)
+                self._run("/usr/bin/mkdir", target_folder)
+            self.folder_list.append(target_folder)
 
         elif new_day:  # New day - duplicate last backup folder:
             if len(self.folder_list) == 0:
@@ -580,17 +580,16 @@ class BlueBackup:
                 )
                 self._run(
                     "/usr/bin/btrfs", "subvolume", "snapshot",
-                    last_folder, self.target_folder
+                    last_folder, target_folder
                 )
             else:
                 # Show a similar message to the one 'btrfs snapshot' shows:
                 self._print_output(
-                    f"Create a hard link copy of '{last_folder}' "
-                    f"in '{self.target_folder}'"
+                    f"Create a hard link copy of '{last_folder}' in '{target_folder}'"
                 )
                 # Create a copy using hard links.
-                self._run("/usr/bin/cp", "-al", last_folder, self.target_folder)
-            self.folder_list.append(self.target_folder)
+                self._run("/usr/bin/cp", "-al", last_folder, target_folder)
+            self.folder_list.append(target_folder)
 
     def _print_filtered_rsync_errors(self, err_msg: str) -> None:
         for line in err_msg.splitlines():
@@ -704,7 +703,7 @@ class BlueBackup:
             source_str = backup_folder.get_source_location()
             # str(path / "_")[:-1] is to ensure that path ends with a "/".
             backup_target_str = str(
-                self.target_folder / backup_folder.target_path / "_"
+                self.config.target_path / backup_folder.target_path / "_"
             )[:-1]
             backup_target_str = self.config.get_full_path(backup_target_str)
 
@@ -719,7 +718,7 @@ class BlueBackup:
                 # Keep a log file for each source folder.
                 # Log files are appended to, so they will keep growing.
                 self.log_file = (
-                    self.target_folder / backup_folder.target_path
+                    self.config.target_path / backup_folder.target_path
                 ).with_suffix(".log")
                 self.log_file.parent.mkdir(exist_ok=True, parents=True)
 
@@ -757,7 +756,7 @@ class BlueBackup:
         self._print_rsync_summary(backup_stats)
 
         # Commit filesystem caches to disk:
-        self._run("/usr/bin/sync", self.target_folder)
+        self._run("/usr/bin/sync", self.config.target_path)
 
     def purge(self, *, daily_keep: int) -> None:
         """Purge old backups."""
@@ -789,7 +788,7 @@ class BlueBackup:
     def report_space_available(self) -> None:
         """Report target device usage and available space."""
         proc = self._run_return_proc(
-            "/usr/bin/df", "--human-readable", self.target_folder
+            "/usr/bin/df", "--human-readable", self.config.target_path
         )
         if proc is not None:
             str_out = proc.stdout.decode("utf8")
