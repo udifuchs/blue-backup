@@ -76,7 +76,7 @@ class Logger(enum.Enum):
     def print(self, text: str, indent: str = "") -> None:
         """Print a log message."""
         stream = sys.stderr if self in {Logger.ERROR, Logger.WARNING} else sys.stdout
-        for line in text.split("\n"):
+        for line in text.splitlines():
             if stream.isatty():
                 # When separating by color, there is no need to separate with indent.
                 stream.write(f"{self.value}{line}{Logger._RESET.value}\n")
@@ -266,7 +266,9 @@ class BackupFolder:
             not source_folder.startswith("{TOML_FOLDER}") and
             not source_path.is_absolute()
         ):
-            raise BlueError(f"Source location '{source_path}' must be absolute path.")
+            raise BlueError(
+                f"Source location '{source_location}' must be absolute path."
+            )
 
         target_str = folder_info.pop_str_or_none("target")
         if isinstance(target_str, str):
@@ -300,9 +302,17 @@ class BackupFolder:
     def get_latest_folder_date(self) -> str:
         """Find the subfolder with the latest date in the source path.
 
-        This function has the side effect of setting the LATEST field
-        in the source path.
+        It should only be called in Mode.OFFSITE.
+        A side effect of this function is setting the LATEST field in the source path.
         """
+        if "{LATEST}" not in str(self.source_path):
+            raise BlueError(
+                "Missing backup folder with {LATEST} field in offsite mode."
+            )
+        if str(self.target_path) != ".":
+            raise BlueError(
+                "Backup folder target must be empty (target='') in offsite mode."
+            )
         proc = Process(self.source_address)
         base_path = self.source_path.str_format(LATEST="")
         latest_date: str | None = None
@@ -389,12 +399,6 @@ class Config:
             else f"{self.target_address}:{local_path}"
         )
 
-    def get_target_location(self) -> str:
-        """Get target location."""
-        if self.target_address is None:
-            return str(self.target_path)
-        return f"{self.target_address}:{self.target_path}"
-
 
 class Mode(enum.Enum):
     """Backup mode as derived from target folder form in the TOML configuration."""
@@ -416,43 +420,27 @@ class BlueBackup:
 
     def __post_init__(self) -> None:
         self.now = datetime.datetime.now().astimezone().replace(microsecond=0)
-        today = self.now.date()
 
         if "{TODAY}" in str(self.config.target_path):
             self.mode = Mode.SNAPSHOT
-            self.target_folder = self.config.target_path.str_format(TODAY=str(today))
-            self.config.target_path = self.config.target_path.str_format(TODAY="")
-            self.log_file = self.target_folder.with_suffix(".log")
+            today = str(self.now.date())
+            self.config.target_path = self.config.target_path.str_format(TODAY=today)
         elif "{LATEST}" in str(self.config.target_path):
             self.mode = Mode.OFFSITE
             if len(self.config.backup_folders) != 1:
                 raise BlueError("Only one backup folder allowed in offsite mode.")
-            backup_folder = self.config.backup_folders[0]
-            if "{LATEST}" not in str(backup_folder.source_path):
-                raise BlueError(
-                    "Missing backup folder with {LATEST} field in offsite mode."
-                )
-            if str(backup_folder.target_path) != ".":
-                raise BlueError(
-                    "Backup folder target must be empty (target='') in offsite mode."
-                )
-            latest_date = backup_folder.get_latest_folder_date()
-            self.target_folder = self.config.target_path.str_format(LATEST=latest_date)
-            self.config.target_path = self.config.target_path.str_format(LATEST="")
-            self.log_file = self.target_folder.with_suffix(".log")
+            latest = self.config.backup_folders[0].get_latest_folder_date()
+            self.config.target_path = self.config.target_path.str_format(LATEST=latest)
         else:
             self.mode = Mode.COLLECT
-            self.target_folder = self.config.target_path
-            self.log_file = self.target_folder / "blue-backup.log"
-            for backup_folder in self.config.backup_folders:
-                if len(backup_folder.target_path.parts) > 1:
-                    raise BlueError(
-                        f"Folder structure '{backup_folder.target_path}' "
-                        "not allowed in collect mode."
-                    )
             if self.first_time:
                 raise BlueError("--first-time cannot be specified in collect mode.")
 
+        self.target_folder = self.config.target_path
+        self.log_file = (
+            None if self.mode is Mode.COLLECT
+            else self.target_folder.with_suffix(".log")
+        )
         self.indent = ""
         self.folder_list: list[pathlib.Path] = []
         self.target_is_btrfs: bool
@@ -465,7 +453,7 @@ class BlueBackup:
         return self._proc
 
     def _log_to_file(self, text: str) -> None:
-        if not self.dry_run:
+        if not self.dry_run and self.log_file is not None:
             try:
                 with self.proc.open(self.log_file, mode="ab") as log_file:
                     log_file.write(f"{text}\n".encode())
@@ -525,37 +513,32 @@ class BlueBackup:
                 f"{self.config.get_full_path(self.target_folder)} "
                 f"at {self.now.timetz()}"
             )
+        finally:
             self.indent = "    "
 
-            if self.mode is Mode.COLLECT:
-                # folder_list and target_is_btrfs are not used in COLLECT mode.
-                return
+        if self.mode is Mode.COLLECT:
+            # folder_list and target_is_btrfs are not used in COLLECT mode.
+            return
 
-            for path_attr in self.proc.iterdir_attr(self.config.target_path):
-                if path_attr.st_mode is not None and stat.S_ISDIR(path_attr.st_mode):
-                    try:
-                        date = datetime.date.fromisoformat(path_attr.filename)
-                        iso_date = date.isoformat()
-                        if path_attr.filename != iso_date:
-                            raise ValueError(f"{path_attr.filename} != {iso_date}")
-                    except ValueError as ex:
-                        self._print_warning(
-                            f"Folder {path_attr.filename}, non ISO date: {ex}"
-                        )
-                    else:
-                        folder_path = self.config.target_path / path_attr.filename
-                        self.folder_list.append(folder_path)
-        except BlueError as ex:
-            self.indent = "    "
-            raise BlueError(
-                "Error writing to target location "
-                f"'{self.config.get_target_location()}': {ex}"
-            ) from ex
+        base_target_path = self.config.target_path.parent
+        for path_attr in self.proc.iterdir_attr(base_target_path):
+            if path_attr.st_mode is not None and stat.S_ISDIR(path_attr.st_mode):
+                try:
+                    date = datetime.date.fromisoformat(path_attr.filename)
+                    iso_date = date.isoformat()
+                    if path_attr.filename != iso_date:
+                        raise ValueError(f"{path_attr.filename} != {iso_date}")
+                except ValueError as ex:
+                    self._print_warning(
+                        f"Folder {path_attr.filename}, non ISO date: {ex}"
+                    )
+                else:
+                    folder_path = base_target_path / path_attr.filename
+                    self.folder_list.append(folder_path)
 
         # Call proc.run() directly because we never want a dry_run here.
         proc = self.proc.run([
-            "/usr/bin/stat", "--file-system", "--format=%T",
-            str(self.config.target_path),
+            "/usr/bin/stat", "--file-system", "--format=%T", str(base_target_path),
         ])
         # Check for errors even though /usr/bin/stat should never fail here.
         if len(proc.stderr) > 0 or proc.returncode != 0:  # pragma: no cover
@@ -608,6 +591,17 @@ class BlueBackup:
                 # Create a copy using hard links.
                 self._run("/usr/bin/cp", "-al", last_folder, self.target_folder)
             self.folder_list.append(self.target_folder)
+
+    def _print_filtered_rsync_errors(self, err_msg: str) -> None:
+        for line in err_msg.splitlines():
+            if line.startswith((
+                "rsync: connection unexpectedly closed (0 bytes received so far)",
+                "rsync error: unexplained error (code 255)",
+                "Return code: ",
+            )):
+                self._log_to_file(line)  # Boring messages only sent to log file.
+            else:
+                self._print_error(line)
 
     @staticmethod
     def _filter_rsync_output(output: bytes) -> dict[str, str]:
@@ -724,18 +718,16 @@ class BlueBackup:
             if self.mode is Mode.COLLECT:
                 # Keep a log file for each source folder.
                 # Log files are appended to, so they will keep growing.
-                rsync_log_file = (
+                self.log_file = (
                     self.target_folder / backup_folder.target_path
                 ).with_suffix(".log")
-            else:
-                rsync_log_file = self.log_file
-            if self.proc.ssh is None:
-                rsync_folder_command.append(f"--log-file={rsync_log_file}")
-            else:
+                self.log_file.parent.mkdir(exist_ok=True, parents=True)
+
+            rsync_folder_command.append(
+                f"--log-file={self.log_file}" if self.proc.ssh is None else
                 # Log to file on the remote (receiver) side:
-                rsync_folder_command.append(
-                    f"--remote-option=--log-file={rsync_log_file}"
-                )
+                f"--remote-option=--log-file={self.log_file}"
+            )
 
             proc = self._run_return_proc(
                 *rsync_folder_command,
@@ -753,13 +745,15 @@ class BlueBackup:
                     self._print_error(
                         f"Errors in rsync from: {source_str} to: {target_str}"
                     )
-                    self._print_error(str(ProcessError(proc)))
+                    self._print_filtered_rsync_errors(str(ProcessError(proc)))
                 stats = self._filter_rsync_output(proc.stdout)
                 delta_seconds = round(time.time() - start_time)
                 stats["time"] = str(datetime.timedelta(seconds=delta_seconds))
                 folder_str = source_str if self.mode is Mode.OFFSITE else target_str
                 backup_stats[folder_str] = stats
 
+        if self.mode is Mode.COLLECT:
+            self.log_file = None
         self._print_rsync_summary(backup_stats)
 
         # Commit filesystem caches to disk:
@@ -805,7 +799,7 @@ class BlueBackup:
             # Output of /usr/bin/df:
             # Filesystem      Size  Used Avail Use% Mounted on
             # -               3.7T  2.3T  1.5T  62% /backup/2020-02-02
-            str_out = str_out.split("\n")[1]  # Use second line.
+            str_out = str_out.splitlines()[1]  # Use second line.
             str_data = str_out.split(maxsplit=5)
             # Desired output:
             # Target device usage: 2.3T / 3.7T (62%) available 1.5T

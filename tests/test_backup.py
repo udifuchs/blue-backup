@@ -77,9 +77,12 @@ def test_basic_fs(
     with pytest.raises(SystemExit, match="1"):
         blue_backup.main(toml_filename)
     captured = capsys.readouterr()
-    assert re.match(
-        "    Error writing to target location '(.)*/target':", captured.err
-    ) is not None
+    assert (
+        f"No such file or directory: '{target_path}/1999-12-25.log" in captured.err
+    ) or (
+        f"Error writing to '127.0.0.1:{target_path}/1999-12-25.log': "
+        "[Errno 2] No such file" in captured.err
+    )
 
     target_path.mkdir()
     # First run, forget specifying --first-time:
@@ -405,7 +408,6 @@ def test_btrfs(
                 assert (
                     "rsync error: some files/attrs were not transferred" in captured.err
                 )
-                assert "Return code: 23" in captured.err
         captured = capsys.readouterr()
         assert (
             re.search(  # Error on writing to local log:
@@ -453,12 +455,13 @@ def test_collect_mode(
             "[backup-folders]\n"
             "'{TOML_FOLDER}/data-to-backup' = {target='local'}\n"
             "'127.0.0.1:{TOML_FOLDER}/data-to-backup' = {"
-            "target='remote',"
+            "target='remote/data',"
             # Use current user and group in test to avoid permission errors:
             f"chown='{os.geteuid()}:{os.getegid()}',"
             # Use weird file permissions:
             "chmod='707'"
             "}\n"
+            "'727.0.0.1:{TOML_FOLDER}/data-to-backup' = {target='remote7'}\n"
         )
     with pytest.raises(SystemExit, match="1"):
         blue_backup.main(str(toml_file), "--first-time")
@@ -467,16 +470,20 @@ def test_collect_mode(
 
     blue_backup.main(str(toml_file))
     captured = capsys.readouterr()
-    assert captured.err == ""
+    assert (
+        captured.err ==
+        f"    Errors in rsync from: 727.0.0.1:{tmp_path}/data-to-backup/ to: remote7\n"
+        "    ssh: Could not resolve hostname 727.0.0.1: Name or service not known\n"
+    )
     assert captured.out.startswith(
         f"Backup collect target: {collect_path} at 00:00:00+00:00"
     )
-    assert (collect_path / "blue-backup.log").exists()
+    assert not (collect_path / "blue-backup.log").exists()
     assert (collect_path / "local").exists()
     assert (collect_path / "local.log").exists()
-    assert (collect_path / "remote").exists()
-    assert (collect_path / "remote.log").exists()
-    for file_path in (collect_path / "remote").iterdir():
+    assert (collect_path / "remote" / "data").exists()
+    assert (collect_path / "remote" / "data.log").exists()
+    for file_path in (collect_path / "remote" / "data").iterdir():
         assert file_path.stat().st_mode & 0o777 == 0o707
 
 
@@ -748,7 +755,7 @@ def test_configuration_errors(
     # Target location unknown address:
     with toml_file.open("w") as tfile:
         tfile.write(
-            "target-location='256.256.256.256:/{TODAY}'\n"
+            "target-location='256.256.256:/{TODAY}'\n"
             "[backup-folders]\n"
             "'{TOML_FOLDER}'={target='target'}\n"
         )
@@ -757,12 +764,11 @@ def test_configuration_errors(
     captured = capsys.readouterr()
     assert (
         captured.out ==
-        "Backup snapshot target: 256.256.256.256:/1999-12-25 at 00:00:00+00:00\n"
+        "Backup snapshot target: 256.256.256:/1999-12-25 at 00:00:00+00:00\n"
     )
     assert (
         captured.err ==
-        "    Error writing to target location '256.256.256.256:/': "
-        "Failed connecting to 256.256.256.256: [Errno -2] Name or service not known\n"
+        "    Failed connecting to 256.256.256: [Errno -2] Name or service not known\n"
     )
 
     # Wrong target location in --dry-run mode raises exception differently:
@@ -782,8 +788,7 @@ def test_configuration_errors(
     )
     assert (
         captured.err ==
-        f"    Error writing to target location '{tmp_path}/no-such-folder': "
-        f"[Errno 2] No such file or directory: '{tmp_path}/no-such-folder'\n"
+        f"    [Errno 2] No such file or directory: '{tmp_path}/no-such-folder'\n"
     )
 
     # Source location not absolute path:
@@ -791,26 +796,12 @@ def test_configuration_errors(
         tfile.write(
             "target-location='{TOML_FOLDER}/{TODAY}'\n"
             "[backup-folders]\n"
-            "'bla-bla-bla'={}\n"
+            "'host:bla-bla-bla'={}\n"
         )
     with pytest.raises(SystemExit, match="1"):
         blue_backup.main(str(toml_file))
     captured = capsys.readouterr()
-    assert captured.err == "Source location 'bla-bla-bla' must be absolute path.\n"
-
-    # Backup folder target cannot be a folder structure in collect mode:
-    with toml_file.open("w") as tfile:
-        tfile.write(
-            "target-location='{TOML_FOLDER}'\n"
-            "[backup-folders]\n"
-            "'/bla-bla/bla'={}\n"
-        )
-    with pytest.raises(SystemExit, match="1"):
-        blue_backup.main(str(toml_file))
-    captured = capsys.readouterr()
-    assert (
-        captured.err == "Folder structure 'bla-bla/bla' not allowed in collect mode.\n"
-    )
+    assert captured.err == "Source location 'host:bla-bla-bla' must be absolute path.\n"
 
     # Missing permissions to TOML file:
     toml_file.chmod(0)
@@ -944,7 +935,6 @@ def test_rsync_timeout(
         captured = capsys.readouterr()
         assert "    [sender] io timeout after 1 seconds -- exiting" in captured.err
         assert "    rsync error: timeout in data send/receive (code 30)" in captured.err
-        assert "    Return code: 30" in captured.err
     finally:
         blue_backup.RSYNC_TIMEOUT = save_rsync_timeout
 
