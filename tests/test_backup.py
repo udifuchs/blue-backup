@@ -476,7 +476,7 @@ def test_collect_mode(
         "    ssh: Could not resolve hostname 727.0.0.1: Name or service not known\n"
     )
     assert captured.out.startswith(
-        f"Backup collect target: {collect_path} at 00:00:00+00:00"
+        f"Backup collect target: {collect_path} at 1999-12-25 00:00:00+00:00"
     )
     assert not (collect_path / "blue-backup.log").exists()
     assert (collect_path / "local").exists()

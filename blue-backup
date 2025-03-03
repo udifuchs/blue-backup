@@ -509,7 +509,7 @@ class BlueBackup:
             self._print_output(
                 f"Backup {self.mode.value} target: "
                 f"{self.config.get_full_path(self.config.target_path)} "
-                f"at {self.now.timetz()}"
+                f"at {self.now if self.mode is Mode.COLLECT else self.now.timetz()}"
             )
         finally:
             self.indent = "    "
