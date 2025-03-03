@@ -542,6 +542,15 @@ def test_lock_file(
             f"Failed locking {lock_file}: [Errno 11] Resource temporarily unavailable"
         )
 
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="Skip permission test running as root.")
+def test_lock_file_permissions(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Test the lock_file context manager."""
+    lock_file = tmp_path / "test.lock"
+    lock_file.touch()
+
     # Fail if we have no access to the lock file:
     lock_file_mode = lock_file.stat().st_mode
     lock_file.chmod(0)
@@ -802,6 +811,16 @@ def test_configuration_errors(
         blue_backup.main(str(toml_file))
     captured = capsys.readouterr()
     assert captured.err == "Source location 'host:bla-bla-bla' must be absolute path.\n"
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="Skip permission test running as root.")
+def test_configuration_permission_errors(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test handling of configuration errors."""
+    toml_file = tmp_path / "blue.toml"
+    toml_file.touch()
 
     # Missing permissions to TOML file:
     toml_file.chmod(0)

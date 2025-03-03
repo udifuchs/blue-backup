@@ -10,7 +10,6 @@ import datetime
 import enum
 import fcntl
 import getpass
-import os
 import pathlib
 import stat
 import subprocess
@@ -113,7 +112,7 @@ class Process:
         if address is not None and "@" in address:
             username, hostname = address.split("@", 2)
         else:
-            username, hostname = os.getlogin(), address
+            username, hostname = getpass.getuser(), address
         self.address = address
 
         self.ssh = None
