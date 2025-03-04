@@ -47,6 +47,8 @@ pydocstyle.convention = "google"
 
 [tool.pylint.message_control]
 disable = [
+    # Too few public methods (0/2)
+    "too-few-public-methods",
     # BlueBackup: Too many instance attributes (11/7)
     "too-many-instance-attributes",
     # Module name "blue-backup" doesn't conform to snake_case naming style

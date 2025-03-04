@@ -982,9 +982,14 @@ def test_main_entry_point(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Test the __name__ == "__main__" entry point."""
-    monkeypatch.setattr(sys, "argv", ["", "--help"])
-    with pytest.raises(SystemExit, match="0"):
+    monkeypatch.setattr(sys, "argv", [""])
+    with pytest.raises(SystemExit, match="2"):
         runpy.run_module("tests.blue_backup", run_name="__main__", alter_sys=True)
     captured = capsys.readouterr()
-    assert captured.err == ""
-    assert captured.out.startswith("usage: blue_backup.py [-h]")
+    assert captured.out == ""
+    assert (
+        captured.err ==
+        "usage: "
+        "blue_backup.py [-h] [--first-time] [--dry-run] [--verbose] toml_config\n"
+        "blue_backup.py: error: the following arguments are required: toml_config\n"
+    )
