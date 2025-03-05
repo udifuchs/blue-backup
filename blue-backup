@@ -241,54 +241,38 @@ class TOMLDict(Dict[str, object]):
         )
 
 
-@dataclasses.dataclass
 class BackupFolder:
-    """Configuration for one backup folder source and target."""
+    """Configuration for one backup source folder source."""
 
-    source_address: str | None
-    source_path: Path
-    target_path: Path
-    exclude: tuple[str, ...]
-    chown: str | None
-    chmod: str | None
-    rsync_options: tuple[str, ...] = ()
-
-    @classmethod
-    def from_toml(cls, source_location: str, folder_info: TOMLDict) -> Self:
-        """Generate folder from data in the TOML file."""
-        if ":" in source_location:
-            source_address, source_folder = source_location.split(":", 2)
-        else:
-            source_address, source_folder = None, source_location
-        source_path = Path(source_folder)
+    def __init__(self, source_location: str, folder_info: TOMLDict) -> None:
+        self.source_address: str | None
+        self.source_address, source_folder = (
+            source_location.split(":", 2) if ":" in source_location else
+            (None, source_location)
+        )
+        self.source_path = Path(source_folder)
         if (
             not source_folder.startswith("{TOML_FOLDER}") and
-            not source_path.is_absolute()
+            not self.source_path.is_absolute()
         ):
             raise BlueError(
                 f"Source location '{source_location}' must be absolute path."
             )
 
         target_str = folder_info.pop_str_or_none("target")
-        if isinstance(target_str, str):
-            target_path = Path(target_str)
-        elif str(source_path) == "{TOML_FOLDER}":
-            target_path = Path(".")
-        else:
-            target_path = source_path.str_format(TOML_FOLDER="").relative_to("/")
+        self.target_path = (
+            Path(target_str) if isinstance(target_str, str) else
+            Path(".") if str(self.source_path) == "{TOML_FOLDER}" else
+            self.source_path.str_format(TOML_FOLDER="").relative_to("/")
+        )
 
-        exclude = folder_info.pop_array_of_str("exclude")
-
-        chown = folder_info.pop_str_or_none("chown")
-        chmod = folder_info.pop_str_or_none("chmod")
-        rsync_options = folder_info.pop_array_of_str("rsync-options")
+        self.exclude = tuple(folder_info.pop_array_of_str("exclude"))
+        self.chown = folder_info.pop_str_or_none("chown")
+        self.chmod = folder_info.pop_str_or_none("chmod")
+        self.rsync_options = tuple(folder_info.pop_array_of_str("rsync-options"))
 
         for key in folder_info:
             Logger.WARNING.print(f"Unknown field for '{source_location}': '{key}'")
-        return cls(
-            source_address, source_path, target_path,
-            tuple(exclude), chown, chmod, tuple(rsync_options)
-        )
 
     def get_source_location(self) -> str:
         """Get source location formatted for the rsync command."""
@@ -333,19 +317,10 @@ class BackupFolder:
         return latest_date
 
 
-@dataclasses.dataclass
 class Config:
     """Configuration from the TOML file."""
 
-    target_address: str | None
-    target_path: Path
-    backup_folders: tuple[BackupFolder, ...]
-    exclude: tuple[str, ...] = ()
-    rsync_options: tuple[str, ...] = ()
-
-    @classmethod
-    def from_toml(cls, filename: str) -> Self:
-        """Create a Config class from a TOML file."""
+    def __init__(self, filename: str) -> None:
         try:
             with pathlib.Path(filename).open(mode="rb") as toml_file:
                 toml_dict = TOMLDict(tomllib.load(toml_file), filename)
@@ -354,36 +329,31 @@ class Config:
 
         target_location = toml_dict.pop_str("target-location")
         backup_folders = toml_dict.pop_table("backup-folders")
-        exclude = toml_dict.pop_array_of_str("exclude")
-        rsync_options = toml_dict.pop_array_of_str("rsync-options")
+        self.exclude = tuple(toml_dict.pop_array_of_str("exclude"))
+        self.rsync_options = tuple(toml_dict.pop_array_of_str("rsync-options"))
         for key in toml_dict:
             Logger.WARNING.print(f"Unknown field in '{filename}': '{key}'")
 
         # Break target location to address and path.
-        target_address: str | None = None
+        self.target_address: str | None = None
         if ":" in target_location:
-            target_address, target_location = target_location.split(":", 2)
-        target_path = Path(target_location)
+            self.target_address, target_location = target_location.split(":", 2)
+        self.target_path = Path(target_location)
         if (
             not target_location.startswith("{TOML_FOLDER}") and
-            not target_path.is_absolute()
+            not self.target_path.is_absolute()
         ):
-            raise BlueError(f"Target location '{target_path}' must be absolute path.")
-
-        backup_folders_conf = tuple(
-            BackupFolder.from_toml(
-                source_location, backup_folders.pop_table(source_location)
+            raise BlueError(
+                f"Target location '{self.target_path}' must be absolute path."
             )
+
+        self.backup_folders = tuple(
+            BackupFolder(source_location, backup_folders.pop_table(source_location))
             for source_location in list(backup_folders)
         )
 
-        config = cls(
-            target_address, target_path, backup_folders_conf,
-            tuple(exclude), tuple(rsync_options),
-        )
         toml_folder_path = pathlib.Path(filename).resolve().parent
-        config.apply_var(TOML_FOLDER=str(toml_folder_path))
-        return config
+        self.apply_var(TOML_FOLDER=str(toml_folder_path))
 
     def apply_var(self, **kwargs: str) -> None:
         """Apply variable replacement to all paths in configuration."""
@@ -428,7 +398,7 @@ class BlueBackup:
     def __init__(self, *args: str) -> None:
         """Initialize a BlueBackup instance from command line arguments."""
         self.settings = Settings(*args)
-        self.config = Config.from_toml(self.settings.toml_config)
+        self.config = Config(self.settings.toml_config)
         self.now = datetime.datetime.now().astimezone().replace(microsecond=0)
 
         if "{TODAY}" in str(self.config.target_path):
