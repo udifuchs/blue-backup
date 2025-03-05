@@ -385,6 +385,9 @@ def test_btrfs(
         # Run the local test in the btrfs:
         test_basic_fs(mount_point, capsys, toml_config, short_test=short_test)
 
+        if short_test:
+            return
+
         (mount_point / "data-to-backup" / "new-file.txt").touch()
         # Fill up the btrfs with zeros:
         proc = subprocess.run(
