@@ -77,11 +77,11 @@ def test_basic_fs(
     with pytest.raises(SystemExit, match="1"):
         blue_backup.main(toml_filename)
     captured = capsys.readouterr()
-    assert (
-        f"No such file or directory: '{target_path}/1999-12-25.log" in captured.err
-    ) or (
-        f"Error writing to '127.0.0.1:{target_path}/1999-12-25.log': "
-        "[Errno 2] No such file" in captured.err
+    assert captured.err in (
+        "    Error writing to log: "
+        f"[Errno 2] No such file or directory: '{target_path}/1999-12-25.log'\n",
+        f"    Error writing to log '127.0.0.1:{target_path}/1999-12-25.log': "
+        "[Errno 2] No such file\n",
     )
 
     target_path.mkdir()
@@ -138,12 +138,10 @@ def test_basic_fs(
     # Second run that should succeed. Also test --verbose:
     blue_backup.main(toml_filename, "--verbose")
     captured = capsys.readouterr()
-    assert (
-        captured.out.startswith(f"Backup snapshot target: {target_path}/{today}") or
-        captured.out.startswith(
-            f"Backup snapshot target: 127.0.0.1:{target_path}/{today}"
-        )
-    )
+    assert captured.out.startswith((
+        f"Backup snapshot target: {target_path}/{today}",
+        f"Backup snapshot target: 127.0.0.1:{target_path}/{today}",
+    ))
     assert "/usr/bin/rsync" in captured.out
     assert "Kept backups: 1 monthly, 0 daily" in captured.out
     assert captured.err == ""
@@ -412,16 +410,11 @@ def test_btrfs(
                     "rsync error: some files/attrs were not transferred" in captured.err
                 )
         captured = capsys.readouterr()
-        assert (
-            re.search(  # Error on writing to local log:
-                r"Error writing to '(.)*/target/(.)*\.log': "
-                r"\[Errno 28\] No space left on device",
-                captured.err
-            ) is not None or
-            re.search(  # Error on writing to remote log:
-                r"Error writing to '127.0.0.1:(.)*/target/(.)*\.log': Failure",
-                captured.err
-            ) is not None
+        assert captured.err.splitlines()[-1] in (
+            f"    Error writing to log '{mount_point}/target/2000-01-16.log': "
+            "[Errno 28] No space left on device",
+            "    Error writing to log "
+            f"'127.0.0.1:{mount_point}/target/1999-12-25.log': Failure",
         )
 
 
@@ -867,7 +860,7 @@ def test_backup_summary(
     blue_backup.main(str(toml_file))
     captured = capsys.readouterr()
     assert "    .      | " in captured.out
-    assert captured.err.startswith("")
+    assert captured.err == ""
 
 
 def test_offsite_mode_errors(
@@ -955,8 +948,11 @@ def test_rsync_timeout(
             )
         blue_backup.main(str(toml_file), "--first-time")
         captured = capsys.readouterr()
-        assert "    [sender] io timeout after 1 seconds -- exiting" in captured.err
-        assert "    rsync error: timeout in data send/receive (code 30)" in captured.err
+        assert captured.err.startswith(
+            f"    Errors in rsync from: {tmp_path}/ to: target\n"
+            "    [sender] io timeout after 1 seconds -- exiting\n"
+            "    rsync error: timeout in data send/receive (code 30)"
+        )
     finally:
         blue_backup.RSYNC_TIMEOUT = save_rsync_timeout
 

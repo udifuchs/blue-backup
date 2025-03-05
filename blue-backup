@@ -439,7 +439,9 @@ class BlueBackup:
                     log_file.write(f"{text}\n".encode())
             except (OSError, paramiko.SSHException) as ex:
                 log_full_path = self.config.get_full_path(self.log_file)
-                raise BlueError(f"Error writing to '{log_full_path}': {ex}") from ex
+                if log_full_path in str(ex):
+                    raise BlueError(f"Error writing to log: {ex}") from ex
+                raise BlueError(f"Error writing to log '{log_full_path}': {ex}") from ex
 
     def _print_output(self, text: str) -> None:
         Logger.OUTPUT.print(text, self.indent)
