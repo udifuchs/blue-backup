@@ -186,6 +186,21 @@ class Path(pathlib.Path):
     if sys.version_info < (3, 12):
         _flavour = pathlib.Path()._flavour
 
+    @property
+    def address(self) -> str | None:
+        """Address of remote path or None for local path."""
+        if ":" in str(self):
+            return str(self).split(":", 2)[0]
+        return None
+
+    @property
+    def local(self) -> Self:
+        """Local part of remote path."""
+        if ":" in str(self):
+            local_folder = str(self).split(":", 2)[1]
+            return type(self)(local_folder)
+        return self
+
     class _Default(Dict[str, str]):
         def __missing__(self, key: str) -> str:
             return key.join(["{", "}"])
@@ -194,6 +209,16 @@ class Path(pathlib.Path):
         """str.format() equivalent that ignores missing keys."""
         str_path = str(self).format_map(Path._Default(**kwargs))
         return type(self)(str_path)
+
+    def is_absolute(self) -> bool:
+        """Check if local part of path is absolute."""
+        if str(self.local).startswith("{TOML_FOLDER}"):
+            return True
+        return super(pathlib.Path, self.local).is_absolute()
+
+    def str_with_trailing_slash(self) -> str:
+        """Return string representation of path ensuring that it ends with a "/"."""
+        return str(self / "_")[:-1]
 
 
 class TOMLDict(Dict[str, object]):
@@ -208,7 +233,7 @@ class TOMLDict(Dict[str, object]):
         if name in self:
             value = self.pop(name)
             if isinstance(value, dict):
-                return self.__class__(value, name)
+                return type(self)(value, name)
             raise BlueError(f"Expected table for '{name}' in {self.name} got: {value}")
         raise BlueError(f"Missing table '{name}' in {self.name}")
 
@@ -245,25 +270,17 @@ class BackupFolder:
     """Configuration for one backup source folder source."""
 
     def __init__(self, source_location: str, folder_info: TOMLDict) -> None:
-        self.source_address: str | None
-        self.source_address, source_folder = (
-            source_location.split(":", 2) if ":" in source_location else
-            (None, source_location)
-        )
-        self.source_path = Path(source_folder)
-        if (
-            not source_folder.startswith("{TOML_FOLDER}") and
-            not self.source_path.is_absolute()
-        ):
+        self.source_path = Path(source_location)
+        if not self.source_path.is_absolute():
             raise BlueError(
-                f"Source location '{source_location}' must be absolute path."
+                f"Source location '{self.source_path}' must be absolute path."
             )
 
         target_str = folder_info.pop_str_or_none("target")
         self.target_path = (
             Path(target_str) if isinstance(target_str, str) else
             Path(".") if str(self.source_path) == "{TOML_FOLDER}" else
-            self.source_path.str_format(TOML_FOLDER="").relative_to("/")
+            self.source_path.local.str_format(TOML_FOLDER="").relative_to("/")
         )
 
         self.exclude = tuple(folder_info.pop_array_of_str("exclude"))
@@ -273,14 +290,6 @@ class BackupFolder:
 
         for key in folder_info:
             Logger.WARNING.print(f"Unknown field for '{source_location}': '{key}'")
-
-    def get_source_location(self) -> str:
-        """Get source location formatted for the rsync command."""
-        # str(path / "_")[:-1] is to ensure that path ends with a "/".
-        source_folder_str = str(self.source_path / "_")[:-1]
-        if self.source_address is None:
-            return source_folder_str
-        return f"{self.source_address}:{source_folder_str}"
 
     def get_latest_folder_date(self) -> str:
         """Find the subfolder with the latest date in the source path.
@@ -296,8 +305,8 @@ class BackupFolder:
             raise BlueError(
                 "Backup folder target must be empty (target='') in offsite mode."
             )
-        proc = Process(self.source_address)
-        base_path = self.source_path.str_format(LATEST="")
+        proc = Process(self.source_path.address)
+        base_path = self.source_path.local.parent
         latest_date: str | None = None
         for path_attr in proc.iterdir_attr(base_path):
             if path_attr.st_mode is not None and stat.S_ISDIR(path_attr.st_mode):
@@ -335,14 +344,8 @@ class Config:
             Logger.WARNING.print(f"Unknown field in '{filename}': '{key}'")
 
         # Break target location to address and path.
-        self.target_address: str | None = None
-        if ":" in target_location:
-            self.target_address, target_location = target_location.split(":", 2)
         self.target_path = Path(target_location)
-        if (
-            not target_location.startswith("{TOML_FOLDER}") and
-            not self.target_path.is_absolute()
-        ):
+        if not self.target_path.is_absolute():
             raise BlueError(
                 f"Target location '{self.target_path}' must be absolute path."
             )
@@ -360,13 +363,6 @@ class Config:
         self.target_path = self.target_path.str_format(**kwargs)
         for bf in self.backup_folders:
             bf.source_path = bf.source_path.str_format(**kwargs)
-
-    def get_full_path(self, local_path: Path | str) -> str:
-        """Return full path including host address in remote mode."""
-        return (
-            str(local_path) if self.target_address is None
-            else f"{self.target_address}:{local_path}"
-        )
 
 
 class Settings:
@@ -429,19 +425,18 @@ class BlueBackup:
     def proc(self) -> Process:
         """Return active Process."""
         if self._proc is None:
-            self._proc = Process(self.config.target_address)
+            self._proc = Process(self.config.target_path.address)
         return self._proc
 
     def _log_to_file(self, text: str) -> None:
         if not self.settings.dry_run and self.log_file is not None:
             try:
-                with self.proc.open(self.log_file, mode="ab") as log_file:
+                with self.proc.open(self.log_file.local, mode="ab") as log_file:
                     log_file.write(f"{text}\n".encode())
             except (OSError, paramiko.SSHException) as ex:
-                log_full_path = self.config.get_full_path(self.log_file)
-                if log_full_path in str(ex):
+                if str(self.log_file) in str(ex):
                     raise BlueError(f"Error writing to log: {ex}") from ex
-                raise BlueError(f"Error writing to log '{log_full_path}': {ex}") from ex
+                raise BlueError(f"Error writing to log '{self.log_file}': {ex}") from ex
 
     def _print_output(self, text: str) -> None:
         Logger.OUTPUT.print(text, self.indent)
@@ -491,8 +486,7 @@ class BlueBackup:
         """Initialize the backup."""
         try:
             self._print_output(
-                f"Backup {self.mode.value} target: "
-                f"{self.config.get_full_path(self.config.target_path)} "
+                f"Backup {self.mode.value} target: {self.config.target_path} "
                 f"at {self.now if self.mode is Mode.COLLECT else self.now.timetz()}"
             )
         finally:
@@ -502,7 +496,7 @@ class BlueBackup:
             # folder_list and target_is_btrfs are not used in COLLECT mode.
             return
 
-        base_target_path = self.config.target_path.parent
+        base_target_path = self.config.target_path.local.parent
         for path_attr in self.proc.iterdir_attr(base_target_path):
             if path_attr.st_mode is not None and stat.S_ISDIR(path_attr.st_mode):
                 try:
@@ -533,7 +527,7 @@ class BlueBackup:
         if self.mode is Mode.COLLECT:
             return
 
-        target_folder = self.config.target_path
+        target_folder = self.config.target_path.local
         new_day = target_folder not in self.folder_list
 
         if self.settings.first_time:
@@ -683,12 +677,9 @@ class BlueBackup:
         backup_stats: dict[str, dict[str, str]] = {}
         for backup_folder in self.config.backup_folders:
             start_time = time.time()
-            source_str = backup_folder.get_source_location()
-            # str(path / "_")[:-1] is to ensure that path ends with a "/".
-            backup_target_str = str(
-                self.config.target_path / backup_folder.target_path / "_"
-            )[:-1]
-            backup_target_str = self.config.get_full_path(backup_target_str)
+            source_str = backup_folder.source_path.str_with_trailing_slash()
+            backup_target_path = self.config.target_path / backup_folder.target_path
+            backup_target_str = backup_target_path.str_with_trailing_slash()
 
             rsync_folder_command = list(rsync_command)
             if backup_folder.chown is not None:
@@ -700,15 +691,14 @@ class BlueBackup:
             if self.mode is Mode.COLLECT:
                 # Keep a log file for each source folder.
                 # Log files are appended to, so they will keep growing.
-                self.log_file = (
-                    self.config.target_path / backup_folder.target_path
-                ).with_suffix(".log")
-                self.log_file.parent.mkdir(exist_ok=True, parents=True)
+                self.log_file = backup_target_path.with_suffix(".log")
+                self.log_file.local.parent.mkdir(exist_ok=True, parents=True)
 
             rsync_folder_command.append(
-                f"--log-file={self.log_file}" if self.proc.ssh is None else
+                f"--log-file={self.log_file}"
+                if self.log_file is None or self.log_file.address is None else
                 # Log to file on the remote (receiver) side:
-                f"--remote-option=--log-file={self.log_file}"
+                f"--remote-option=--log-file={self.log_file.local}"
             )
 
             proc = self._run_return_proc(
@@ -739,7 +729,7 @@ class BlueBackup:
         self._print_rsync_summary(backup_stats)
 
         # Commit filesystem caches to disk:
-        self._run("/usr/bin/sync", self.config.target_path)
+        self._run("/usr/bin/sync", self.config.target_path.local)
 
     def purge(self, *, daily_keep: int) -> None:
         """Purge old backups."""
@@ -771,7 +761,7 @@ class BlueBackup:
     def report_space_available(self) -> None:
         """Report target device usage and available space."""
         proc = self._run_return_proc(
-            "/usr/bin/df", "--human-readable", self.config.target_path
+            "/usr/bin/df", "--human-readable", self.config.target_path.local
         )
         if proc is not None:
             str_out = proc.stdout.decode("utf8")

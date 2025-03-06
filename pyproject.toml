@@ -49,8 +49,10 @@ pydocstyle.convention = "google"
 disable = [
     # Too few public methods (0/2)
     "too-few-public-methods",
-    # BlueBackup: Too many instance attributes (11/7)
+    # BlueBackup: Too many instance attributes (9/7)
     "too-many-instance-attributes",
+    # tests/test_backup.py: Too many lines in module (1006/1000)
+    "too-many-lines",
     # Module name "blue-backup" doesn't conform to snake_case naming style
     "invalid-name",
     # Import "import paramiko" should be placed at the top of the module

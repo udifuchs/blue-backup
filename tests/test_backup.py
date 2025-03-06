@@ -570,6 +570,18 @@ def test_path_class() -> None:
     resolved_path = keyed_path.str_format(KEY_1="hello")
     assert str(resolved_path) == "/folder/hello_{KEY_2}"
 
+    local_path = blue_backup.Path("foo/bar")
+    assert local_path.local is local_path
+    assert local_path.address is None
+    assert local_path.str_with_trailing_slash() == "foo/bar/"
+    assert not local_path.is_absolute()
+
+    remote_path = blue_backup.Path("host:foo/bar")
+    assert remote_path.local == local_path
+    assert remote_path.address == "host"
+    assert remote_path.str_with_trailing_slash() == "host:foo/bar/"
+    assert not remote_path.is_absolute()
+
 
 def test_configuration(
     tmp_path: pathlib.Path,
