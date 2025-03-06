@@ -485,21 +485,37 @@ def test_collect_mode(
 
 def test_process_class(monkeypatch: pytest.MonkeyPatch) -> None:
     """Direct tests of the Process class."""
+    # Test connecting to non-existing host name:
+    with pytest.raises(blue_backup.ProcessConnectionError) as proc_exc:
+        blue_backup.Process("no-such-user@727.0.0.1")
+    assert (
+        str(proc_exc.value) ==
+        "Failed connecting to 727.0.0.1: [Errno -2] Name or service not known"
+    )
+
     # Test getting password when connected to terminal:
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(getpass, "getpass", lambda _prompt: "wrong-password")
-    with pytest.raises(blue_backup.BlueError) as blue_exc:
+    saved_prompt = ""
+
+    def mock_getpass(prompt: str) -> str:
+        nonlocal saved_prompt
+        saved_prompt = prompt
+        return "wrong-password"
+
+    monkeypatch.setattr(getpass, "getpass", mock_getpass)
+    with pytest.raises(blue_backup.ProcessConnectionError) as proc_exc:
         blue_backup.Process("no-such-user@127.0.0.1")
     assert (
-        str(blue_exc.value) == "Failed connecting to 127.0.0.1: Authentication failed."
+        str(proc_exc.value) == "Failed connecting to 127.0.0.1: Authentication failed."
     )
+    assert saved_prompt == "no-such-user@127.0.0.1's password: "
 
     # Test getting password when not connected to terminal:
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
-    with pytest.raises(blue_backup.BlueError) as blue_exc:
+    with pytest.raises(blue_backup.ProcessConnectionError) as proc_exc:
         blue_backup.Process("no-such-user@127.0.0.1")
     assert (
-        str(blue_exc.value) ==
+        str(proc_exc.value) ==
         "Failed connecting to 127.0.0.1: No terminal. Cannot get password."
     )
 
