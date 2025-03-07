@@ -75,6 +75,8 @@ class Logger(enum.Enum):
     def print(self, text: str, indent: str = "") -> None:
         """Print a log message."""
         stream = sys.stderr if self in {Logger.ERROR, Logger.WARNING} else sys.stdout
+        if stream is None:  # Can happen if invoked with 'blue-backup blue.toml 1>&-'
+            return
         for line in text.splitlines():
             if stream.isatty():
                 # When separating by color, there is no need to separate with indent.
@@ -123,6 +125,9 @@ class Process:
                 try:
                     self.ssh.connect(hostname, username=username)
                 except paramiko.AuthenticationException:
+                    if sys.stdin is None:
+                        # Can happen if invoked with 'blue-backup blue.toml 0>&-'
+                        raise OSError("No input. Cannot get password.") from None
                     if not sys.stdin.isatty():
                         raise OSError("No terminal. Cannot get password.") from None
                     password = getpass.getpass(f"{username}@{hostname}'s password: ")

@@ -519,6 +519,16 @@ def test_process_class(monkeypatch: pytest.MonkeyPatch) -> None:
         "Failed connecting to 127.0.0.1: No terminal. Cannot get password."
     )
 
+    # Test getting password with stdin file descriptor closed as in the case of:
+    # $ blue-backup blue.toml 0>&-
+    monkeypatch.setattr(sys, "stdin", None)
+    with pytest.raises(blue_backup.ProcessConnectionError) as proc_exc:
+        blue_backup.Process("no-such-user@127.0.0.1")
+    assert (
+        str(proc_exc.value) ==
+        "Failed connecting to 127.0.0.1: No input. Cannot get password."
+    )
+
     proc = blue_backup.Process(address=None)
     with pytest.raises(blue_backup.BlueError) as blue_exc:
         proc.open(pathlib.Path("/no-such-file"), "r")  # type: ignore[arg-type]
@@ -1001,6 +1011,15 @@ def test_terminal_output(
         "[Errno 2] No such file or directory: 'no-such-file.toml'"
         f"{blue_backup.Logger['_RESET'].value}\n"
     )
+    assert captured.out == ""
+
+    # Test running with stderr file descriptor closed as in the case of:
+    # $ blue-backup no-such-file.toml 2>&-
+    monkeypatch.setattr(sys, "stderr", None)
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main("no-such-file.toml")
+    captured = capsys.readouterr()
+    assert captured.err == ""
     assert captured.out == ""
 
 
