@@ -47,8 +47,8 @@ class BlueError(Exception):
 
 
 @dataclasses.dataclass
-class ProcessConnectionError(BlueError):
-    """Error connecting to remote process."""
+class BlueConnectionError(BlueError):
+    """Error connecting to remote host."""
     hostname: str
 
     def __str__(self) -> str:
@@ -75,7 +75,7 @@ class Logger(enum.Enum):
     def print(self, text: str, indent: str = "") -> None:
         """Print a log message."""
         stream = sys.stderr if self in {Logger.ERROR, Logger.WARNING} else sys.stdout
-        if stream is None:  # Can happen if invoked with 'blue-backup blue.toml 1>&-'
+        if stream is None:  # Can happen if invoked with: 'blue-backup blue.toml 1>&-'
             return
         for line in text.splitlines():
             if stream.isatty():
@@ -102,8 +102,8 @@ def lock_file(filename: pathlib.Path | str) -> Iterator[BinaryIO]:
             fcntl.flock(flock_file, fcntl.LOCK_UN)
 
 
-class Process:
-    """Handle local and remote processes and filesystem access.
+class Connection:
+    """Handle connection to local and remote processes and filesystem access.
 
     For local access, subprocess and pathlib modules are used.
     For remote access, paramiko's ssh and sftp are used.
@@ -114,39 +114,41 @@ class Process:
             address.split("@", 2) if address is not None and "@" in address else
             (getpass.getuser(), address)
         )
+        self.local = hostname is None
+        if hostname is None:
+            return
 
-        self.ssh = None
-        self.sftp = None
-        if hostname is not None:
-            self.ssh = paramiko.SSHClient()
-            self.ssh.load_system_host_keys()
-            password = ""
+        self.ssh = paramiko.SSHClient()
+        self.ssh.load_system_host_keys()
+        password = None
+        try:
             try:
-                try:
-                    self.ssh.connect(hostname, username=username)
-                except paramiko.AuthenticationException:
-                    if sys.stdin is None:
-                        # Can happen if invoked with 'blue-backup blue.toml 0>&-'
-                        raise OSError("No input. Cannot get password.") from None
-                    if not sys.stdin.isatty():
-                        raise OSError("No terminal. Cannot get password.") from None
-                    password = getpass.getpass(f"{username}@{hostname}'s password: ")
-                    self.ssh.connect(hostname, username=username, password=password)
-            except (
-                # [Errno -2] Name or service not known
-                OSError,
-                # paramiko.ssh_exception.AuthenticationException: Authentication failed.
-                paramiko.SSHException,
-            ) as ex:
-                raise ProcessConnectionError(hostname) from ex
-            finally:
-                del password
-            self.sftp = self.ssh.open_sftp()
+                self.ssh.connect(hostname, username=username)
+            except paramiko.AuthenticationException:
+                password = ""  # Mark that user should be prompt for password.
+            if password == "":
+                if sys.stdin is None:
+                    # Can happen if invoked with: 'blue-backup 0>&-'
+                    raise OSError("No input. Cannot get password.") from None
+                if not sys.stdin.isatty():
+                    raise OSError("No terminal. Cannot get password.") from None
+                password = getpass.getpass(f"{username}@{hostname}'s password: ")
+                self.ssh.connect(hostname, username=username, password=password)
+        except (
+            # [Errno -2] Name or service not known
+            OSError,
+            # paramiko.ssh_exception.AuthenticationException: Authentication failed.
+            paramiko.SSHException,
+        ) as ex:
+            raise BlueConnectionError(hostname) from ex
+        finally:
+            del password
+        self.sftp = self.ssh.open_sftp()
 
     def iterdir_attr(self, path: pathlib.Path) -> Iterator[paramiko.SFTPAttributes]:
         """Yield SFTPAttributes objects of the folder content."""
         try:
-            if self.sftp is None:
+            if self.local:
                 for subpath in path.iterdir():
                     yield paramiko.SFTPAttributes.from_stat(
                         subpath.stat(), subpath.name
@@ -160,7 +162,7 @@ class Process:
         self, args: Sequence[str], *, force_local: bool = False
     ) -> subprocess.CompletedProcess[bytes]:
         """Run the command described by args and wait for it to complete."""
-        if force_local or self.ssh is None:
+        if force_local or self.local:
             proc = subprocess.run(args, check=False, capture_output=True)
         else:
             command = " ".join(args)
@@ -177,7 +179,7 @@ class Process:
         """Open file locally or remotely."""
         if "b" not in mode:
             raise BlueError(f"File '{filepath}' must be opened in binary mode")
-        if self.sftp is None:
+        if self.local:
             return filepath.open(mode=mode)
         sftp_file = self.sftp.file(str(filepath), mode)
         return cast(BinaryIO, sftp_file)
@@ -308,10 +310,10 @@ class BackupFolder:
             raise BlueError(
                 "Backup folder target must be empty (target='') in offsite mode."
             )
-        proc = Process(self.source_path.address)
+        conn = Connection(self.source_path.address)
         base_path = self.source_path.local.parent
         latest_date: str | None = None
-        for path_attr in proc.iterdir_attr(base_path):
+        for path_attr in conn.iterdir_attr(base_path):
             if path_attr.st_mode is not None and stat.S_ISDIR(path_attr.st_mode):
                 try:
                     date = datetime.date.fromisoformat(path_attr.filename)
@@ -420,21 +422,21 @@ class BlueBackup:
             else self.config.target_path.with_suffix(".log")
         )
         self.indent = ""
-        self._proc: Process | None = None
+        self._conn: Connection | None = None
         self.folder_list: list[pathlib.Path] = []
         self.target_is_btrfs: bool
 
     @property
-    def proc(self) -> Process:
-        """Return active Process."""
-        if self._proc is None:
-            self._proc = Process(self.config.target_path.address)
-        return self._proc
+    def conn(self) -> Connection:
+        """Return active Connection."""
+        if self._conn is None:
+            self._conn = Connection(self.config.target_path.address)
+        return self._conn
 
     def _log_to_file(self, text: str) -> None:
         if not self.settings.dry_run and self.log_file is not None:
             try:
-                with self.proc.open(self.log_file.local, mode="ab") as log_file:
+                with self.conn.open(self.log_file.local, mode="ab") as log_file:
                     log_file.write(f"{text}\n".encode())
             except (OSError, paramiko.SSHException) as ex:
                 if str(self.log_file) in str(ex):
@@ -466,7 +468,7 @@ class BlueBackup:
     ) -> subprocess.CompletedProcess[bytes] | None:
         """Run an external command in a subprocess."""
         str_args = tuple(str(arg) for arg in args)
-        if force_local or self.proc.ssh is None:
+        if force_local or self.conn.local:
             self._print_command(" ".join(str_args))
         else:
             self._print_command(
@@ -475,7 +477,7 @@ class BlueBackup:
         if self.settings.dry_run:
             return None
 
-        return self.proc.run(str_args, force_local=force_local)
+        return self.conn.run(str_args, force_local=force_local)
 
     def _run(self, *args: str | pathlib.Path) -> None:
         proc = self._run_return_proc(*args)
@@ -502,7 +504,7 @@ class BlueBackup:
             return
 
         base_target_path = self.config.target_path.local.parent
-        for path_attr in self.proc.iterdir_attr(base_target_path):
+        for path_attr in self.conn.iterdir_attr(base_target_path):
             if path_attr.st_mode is not None and stat.S_ISDIR(path_attr.st_mode):
                 try:
                     date = datetime.date.fromisoformat(path_attr.filename)
@@ -517,8 +519,8 @@ class BlueBackup:
                     folder_path = base_target_path / path_attr.filename
                     self.folder_list.append(folder_path)
 
-        # Call proc.run() directly because we never want a dry_run here.
-        proc = self.proc.run([
+        # Call conn.run() directly because we never want a dry_run here.
+        proc = self.conn.run([
             "/usr/bin/stat", "--file-system", "--format=%T", str(base_target_path),
         ])
         # Check for errors even though /usr/bin/stat should never fail here.

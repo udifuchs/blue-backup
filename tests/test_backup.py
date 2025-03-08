@@ -483,13 +483,13 @@ def test_collect_mode(
         assert file_path.stat().st_mode & 0o777 == 0o707
 
 
-def test_process_class(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Direct tests of the Process class."""
+def test_connection_class(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Direct tests of the Connection class."""
     # Test connecting to non-existing host name:
-    with pytest.raises(blue_backup.ProcessConnectionError) as proc_exc:
-        blue_backup.Process("no-such-user@727.0.0.1")
+    with pytest.raises(blue_backup.BlueConnectionError) as conn_exc:
+        blue_backup.Connection("no-such-user@727.0.0.1")
     assert (
-        str(proc_exc.value) ==
+        str(conn_exc.value) ==
         "Failed connecting to 727.0.0.1: [Errno -2] Name or service not known"
     )
 
@@ -503,44 +503,44 @@ def test_process_class(monkeypatch: pytest.MonkeyPatch) -> None:
         return "wrong-password"
 
     monkeypatch.setattr(getpass, "getpass", mock_getpass)
-    with pytest.raises(blue_backup.ProcessConnectionError) as proc_exc:
-        blue_backup.Process("no-such-user@127.0.0.1")
+    with pytest.raises(blue_backup.BlueConnectionError) as conn_exc:
+        blue_backup.Connection("no-such-user@127.0.0.1")
     assert (
-        str(proc_exc.value) == "Failed connecting to 127.0.0.1: Authentication failed."
+        str(conn_exc.value) == "Failed connecting to 127.0.0.1: Authentication failed."
     )
     assert saved_prompt == "no-such-user@127.0.0.1's password: "
 
     # Test getting password when not connected to terminal:
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
-    with pytest.raises(blue_backup.ProcessConnectionError) as proc_exc:
-        blue_backup.Process("no-such-user@127.0.0.1")
+    with pytest.raises(blue_backup.BlueConnectionError) as conn_exc:
+        blue_backup.Connection("no-such-user@127.0.0.1")
     assert (
-        str(proc_exc.value) ==
+        str(conn_exc.value) ==
         "Failed connecting to 127.0.0.1: No terminal. Cannot get password."
     )
 
     # Test getting password with stdin file descriptor closed as in the case of:
     # $ blue-backup blue.toml 0>&-
     monkeypatch.setattr(sys, "stdin", None)
-    with pytest.raises(blue_backup.ProcessConnectionError) as proc_exc:
-        blue_backup.Process("no-such-user@127.0.0.1")
+    with pytest.raises(blue_backup.BlueConnectionError) as conn_exc:
+        blue_backup.Connection("no-such-user@127.0.0.1")
     assert (
-        str(proc_exc.value) ==
+        str(conn_exc.value) ==
         "Failed connecting to 127.0.0.1: No input. Cannot get password."
     )
 
-    proc = blue_backup.Process(address=None)
+    conn = blue_backup.Connection(address=None)
     with pytest.raises(blue_backup.BlueError) as blue_exc:
-        proc.open(pathlib.Path("/no-such-file"), "r")  # type: ignore[arg-type]
+        conn.open(pathlib.Path("/no-such-file"), "r")  # type: ignore[arg-type]
     assert str(blue_exc.value) == "File '/no-such-file' must be opened in binary mode"
 
     with pytest.raises(FileNotFoundError) as exc_info:
-        proc.open(pathlib.Path("/no-such-file"), "rb")
+        conn.open(pathlib.Path("/no-such-file"), "rb")
     assert str(exc_info.value) == "[Errno 2] No such file or directory: '/no-such-file'"
 
-    proc = blue_backup.Process(address="127.0.0.1")
+    conn = blue_backup.Connection(address="127.0.0.1")
     with pytest.raises(FileNotFoundError) as exc_info:
-        proc.open(pathlib.Path("/no-such-file"), "rb")
+        conn.open(pathlib.Path("/no-such-file"), "rb")
     assert str(exc_info.value) == "[Errno 2] No such file"
 
 
