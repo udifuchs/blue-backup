@@ -10,6 +10,7 @@ import datetime
 import enum
 import fcntl
 import getpass
+import os
 import pathlib
 import stat
 import subprocess
@@ -183,6 +184,12 @@ class Connection:
             return filepath.open(mode=mode)
         sftp_file = self.sftp.file(str(filepath), mode)
         return cast(BinaryIO, sftp_file)
+
+    def stat(self, filepath: pathlib.Path) -> os.stat_result:
+        """Return os.stat_result containing information about this path."""
+        if self.local:
+            return filepath.stat()
+        return cast(os.stat_result, self.sftp.stat(str(filepath)))
 
 
 class Path(pathlib.Path):
@@ -572,7 +579,21 @@ class BlueBackup:
                     f"Create a hard link copy of '{last_folder}' in '{target_folder}'"
                 )
                 # Create a copy using hard links.
-                self._run("/usr/bin/cp", "-al", last_folder, target_folder)
+                # First copy to a temporary folder to make sure we never have
+                # a partially copied target folder.
+                tmp_target_folder = target_folder.with_suffix(".tmp")
+                try:
+                    self.conn.stat(tmp_target_folder)
+                except FileNotFoundError:
+                    pass  # Temporary folder should not exist.
+                else:
+                    self._print_warning(
+                        "Deleting existing temporary target folder: "
+                        f"{tmp_target_folder}"
+                    )
+                    self._run("/usr/bin/rm", "-rf", tmp_target_folder)
+                self._run("/usr/bin/cp", "-al", last_folder, tmp_target_folder)
+                self._run("/usr/bin/mv", tmp_target_folder, target_folder)
             self.folder_list.append(target_folder)
 
     def _print_filtered_rsync_errors(self, err_msg: str) -> None:

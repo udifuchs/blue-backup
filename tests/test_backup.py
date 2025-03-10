@@ -60,8 +60,8 @@ datetime.datetime = FakeDatetime  # type: ignore[misc]
 def test_basic_fs(
     tmp_path: pathlib.Path,
     capsys: pytest.CaptureFixture[str],
-    toml_config: str,
     *,
+    toml_config: str,
     short_test: bool,
 ) -> None:
     """Test backup functionality with basic file system (not btrfs)."""
@@ -122,6 +122,8 @@ def test_basic_fs(
     assert not (target_path / str(today) / "data-to-backup" / "cache").exists()
 
     if short_test:
+        # The copy failure test has a different code path for remote target:
+        subtest_copy_failure(target_path, toml_filename, capsys)
         return
 
     # Second backup, forget removing --first-time:
@@ -147,6 +149,7 @@ def test_basic_fs(
     assert captured.err == ""
 
     subtest_offsite_mode(tmp_path, capsys)
+    subtest_copy_failure(target_path, toml_filename, capsys)
     subtest_multi_dates_backup(toml_filename, capsys)
     subtest_iso_date_folders(target_path, toml_filename, capsys)
 
@@ -238,6 +241,53 @@ def subtest_multi_dates_backup(
                 "ERROR: Could not destroy subvolume/snapshot: Operation not permitted"
                 in captured.err
             )
+
+
+def subtest_copy_failure(
+    target_path: pathlib.Path,
+    toml_filename: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test failure creating hard link copy."""
+    if target_path.parts[1] != "tmp":
+        # If target does not start with "/tmp", btrfs mode is being tested
+        # and btrfs uses subvolume snapshot instead of hard link copy.
+        return
+    next_date = FakeDatetime.now().date() + datetime.timedelta(days=1)
+    FakeDatetime.fake_today = next_date.timetuple()[:3]
+
+    def mock_run_return_proc(
+        self: blue_backup.BlueBackup, *args: str | blue_backup.Path
+    ) -> subprocess.CompletedProcess[bytes]:
+        str_args = tuple(str(arg) for arg in args)
+        proc = self.conn.run(str_args)
+        assert args[0] == "/usr/bin/cp"
+        proc.stderr = b"Mocked copy error\n"
+        return proc
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(blue_backup.BlueBackup, "_run_return_proc", mock_run_return_proc)
+        with pytest.raises(SystemExit, match="1"):
+            blue_backup.main(toml_filename)
+    captured = capsys.readouterr()
+    assert (
+        captured.err ==
+        "    Mocked copy error\n"
+        "    Return code: 0\n"
+    )
+
+    # Backup again with a "Fixed" the hard link copy:
+    blue_backup.main(toml_filename)
+    captured = capsys.readouterr()
+    assert (
+        captured.err ==
+        "    Folder 1999-12-26.tmp, non ISO date: "
+        "Invalid isoformat string: '1999-12-26.tmp'\n"
+        f"    Deleting existing temporary target folder: {target_path}/1999-12-26.tmp\n"
+    )
+
+    prev_date = FakeDatetime.now().date() - datetime.timedelta(days=1)
+    FakeDatetime.fake_today = prev_date.timetuple()[:3]
 
 
 def subtest_iso_date_folders(
@@ -374,14 +424,17 @@ def test_btrfs_mount_point(tmp_path: pathlib.Path) -> None:
 def test_btrfs(
     tmp_path: pathlib.Path,
     capsys: pytest.CaptureFixture[str],
-    toml_config: str,
     *,
+    toml_config: str,
     short_test: bool,
 ) -> None:
     """Test backup to a btrfs target location."""
     with btrfs_mount_point(tmp_path) as mount_point:
         # Run the local test in the btrfs:
-        test_basic_fs(mount_point, capsys, toml_config, short_test=short_test)
+        test_basic_fs(
+            mount_point, capsys,
+            toml_config=toml_config, short_test=short_test
+        )
 
         if short_test:
             return
@@ -425,7 +478,8 @@ def test_remote_target_and_source(
     """Test backup to a remote target and source location."""
     with pytest.raises(AssertionError) as exc_info:
         test_basic_fs(
-            tmp_path, capsys, "blue-remote-target-and-source.toml", short_test=True
+            tmp_path, capsys,
+            toml_config="blue-remote-target-and-source.toml", short_test=True
         )
     assert "The source and destination cannot both be remote." in str(exc_info.value)
 
