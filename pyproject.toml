@@ -27,6 +27,7 @@ ignore = [
     "ERA001",  # Found commented-out code
     "S603",  # `subprocess` call: check for execution of untrusted input
     "TC003",  # Move standard library import `...` into a type-checking block
+    "TC006",  # Add quotes to type expression in `typing.cast()`
     "TRY003",  # Avoid specifying long messages outside the exception class
     "TRY301",  # Abstract `raise` to an inner function
 ]
