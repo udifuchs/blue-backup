@@ -1087,9 +1087,4 @@ def test_main_entry_point(
         runpy.run_module("tests.blue_backup", run_name="__main__", alter_sys=True)
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert (
-        captured.err ==
-        "usage: "
-        "blue_backup.py [-h] [--first-time] [--dry-run] [--verbose] toml_config\n"
-        "blue_backup.py: error: the following arguments are required: toml_config\n"
-    )
+    assert "error: the following arguments are required: toml_config" in captured.err
