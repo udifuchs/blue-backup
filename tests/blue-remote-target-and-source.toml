@@ -1,7 +1,7 @@
 target-location = "127.0.0.1:{TOML_FOLDER}/target/{TODAY}"
 
-exclude = ["cache", ".cache", "__pycache__"]
+exclude = [ "cache", ".cache", "__pycache__" ]
 
 [backup-folders]
-"127.0.0.1:{TOML_FOLDER}/data-to-backup" = {target="remote", exclude=["cache"]}
-"{TOML_FOLDER}/data-to-backup" = {target="local", exclude=["cache"]}
+"127.0.0.1:{TOML_FOLDER}/data-to-backup" = { target = "remote", exclude = [ "cache" ] }
+"{TOML_FOLDER}/data-to-backup" = { target = "local", exclude = [ "cache" ] }

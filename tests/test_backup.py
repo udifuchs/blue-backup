@@ -19,9 +19,9 @@ if sys.version_info >= (3, 11):
 else:  # Avoid depending on typing-extensions
     Self = None
 
-# import test/blue_backup.py which is a softlink to blue-backup:
 import pytest
 
+# import test/blue_backup.py which is a softlink to blue-backup:
 from . import blue_backup
 
 # Select first fake date to test accumulation of monthly backups:
@@ -694,7 +694,7 @@ def test_configuration(
         tfile.write(
             "target-location='{TOML_FOLDER}/backup-target/{TODAY}'\n"
             "[backup-folders]\n"
-            "'{TOML_FOLDER}/backup-source'={}\n"
+            f"'{tmp_path}/backup-source'={{}}\n"
         )
     blue_backup.main(str(toml_file), "--first-time")
     captured = capsys.readouterr()
@@ -829,6 +829,36 @@ def test_source_folder_schema_errors(
         "--my-rsync-option\n"
     )
 
+    # Remote source folder without target:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location = '{TOML_FOLDER}/{TODAY}'\n"
+            "[backup-folders]\n"
+            "'127.0.0.1:/my-folder' = {}\n"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert (
+        captured.err ==
+        "Remote source '127.0.0.1:/my-folder' requires a target path.\n"
+    )
+
+    # Source folder with TOML_FOLDER without target:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location = '{TOML_FOLDER}/{TODAY}'\n"
+            "[backup-folders]\n"
+            "'{TOML_FOLDER}' = {}\n"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert (
+        captured.err ==
+        "Source with TOML_FOLDER '{TOML_FOLDER}' requires a target path.\n"
+    )
+
 
 def test_configuration_errors(
     tmp_path: pathlib.Path,
@@ -933,26 +963,14 @@ def test_backup_summary(
         tfile.write(
             "target-location='{TOML_FOLDER}/{TODAY}'\n"
             "[backup-folders]\n"
-            "'{TOML_FOLDER}/no-such-folder'={}\n"
+            "'{TOML_FOLDER}/no-such-folder' = { target='nor-such-folder' }\n"
         )
     blue_backup.main("--first-time", str(toml_file))
     captured = capsys.readouterr()
-    assert "    no-such-folder | " in captured.out
+    assert "    nor-such-folder | " in captured.out
     assert captured.err.startswith(
-        f"    Errors in rsync from: {tmp_path}/no-such-folder/ to: no-such-folder\n"
+        f"    Errors in rsync from: {tmp_path}/no-such-folder/ to: nor-such-folder\n"
     )
-
-    # Source location '{TOML_FOLDER}' uses a different source code path:
-    with toml_file.open("w") as tfile:
-        tfile.write(
-            "target-location='{TOML_FOLDER}/{TODAY}'\n"
-            "[backup-folders]\n"
-            "'{TOML_FOLDER}'={}\n"
-        )
-    blue_backup.main(str(toml_file))
-    captured = capsys.readouterr()
-    assert "    .      | " in captured.out
-    assert captured.err == ""
 
 
 def test_offsite_mode_errors(
@@ -994,7 +1012,7 @@ def test_offsite_mode_errors(
         tfile.write(
             "target-location='{TOML_FOLDER}/offsite/{LATEST}'\n"
             "[backup-folders]\n"
-            "'{TOML_FOLDER}/target/{LATEST}' = {}"
+            "'{TOML_FOLDER}/target/{LATEST}' = { target = 'target' }"
         )
     with pytest.raises(SystemExit, match="1"):
         blue_backup.main(str(toml_file))

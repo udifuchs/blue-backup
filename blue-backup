@@ -289,10 +289,17 @@ class BackupFolder:
             )
 
         target_str = folder_info.pop_str_or_none("target")
+        if target_str is None and self.source_path.address is not None:
+            raise BlueError(
+                f"Remote source '{self.source_path}' requires a target path."
+            )
+        if target_str is None and "{TOML_FOLDER}" in str(self.source_path):
+            raise BlueError(
+                f"Source with TOML_FOLDER '{self.source_path}' requires a target path."
+            )
         self.target_path = (
             Path(target_str) if isinstance(target_str, str) else
-            Path(".") if str(self.source_path) == "{TOML_FOLDER}" else
-            self.source_path.local.str_format(TOML_FOLDER="").relative_to("/")
+            self.source_path.relative_to("/")
         )
 
         self.exclude = tuple(folder_info.pop_array_of_str("exclude"))

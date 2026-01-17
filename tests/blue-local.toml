@@ -1,6 +1,6 @@
 target-location = "{TOML_FOLDER}/target/{TODAY}"
 
-exclude = ["cache", ".cache", "__pycache__"]
+exclude = [ "cache", ".cache", "__pycache__" ]
 
 [backup-folders]
-"{TOML_FOLDER}/data-to-backup" = {exclude=["cache"]}
+"{TOML_FOLDER}/data-to-backup" = { target = "data-to-backup", exclude = [ "cache" ] }
