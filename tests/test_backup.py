@@ -930,6 +930,22 @@ def test_configuration_errors(
     captured = capsys.readouterr()
     assert captured.err == "Source location 'host:bla-bla-bla' must be absolute path.\n"
 
+    # Source location not absolute path:
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location = '{TOML_FOLDER}/{TODAY}'\n"
+            "[backup-folders]\n"
+            "'/home' = {}\n"
+            "'/home/user' = {}\n"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert (
+        captured.err ==
+        "Target folder of '/home' overlaps with target folder of '/home/user'.\n"
+    )
+
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="Skip permission test running as root.")
 def test_configuration_permission_errors(
@@ -985,8 +1001,8 @@ def test_offsite_mode_errors(
         tfile.write(
             "target-location='{TOML_FOLDER}/offsite/{LATEST}'\n"
             "[backup-folders]\n"
-            "'{TOML_FOLDER}/target/{LATEST}' = {target=''}\n"
-            "'{TOML_FOLDER}/target-2/{LATEST}' = {target=''}"
+            "'{TOML_FOLDER}/target-1/{LATEST}' = { target = '1' }\n"
+            "'{TOML_FOLDER}/target-2/{LATEST}' = { target = '2' }"
         )
     with pytest.raises(SystemExit, match="1"):
         blue_backup.main(str(toml_file))

@@ -376,12 +376,27 @@ class Config:
 
         toml_folder_path = pathlib.Path(filename).resolve().parent
         self.apply_var(TOML_FOLDER=str(toml_folder_path))
+        self.check_all_targets_unique()
 
     def apply_var(self, **kwargs: str) -> None:
         """Apply variable replacement to all paths in configuration."""
         self.target_path = self.target_path.str_format(**kwargs)
         for bf in self.backup_folders:
             bf.source_path = bf.source_path.str_format(**kwargs)
+
+    def check_all_targets_unique(self) -> None:
+        """Check that there is no overlap between target folders."""
+        for folder_1 in self.backup_folders:
+            target_1 = folder_1.target_path
+            for folder_2 in self.backup_folders:
+                if folder_1 is folder_2:
+                    continue
+                target_2 = folder_2.target_path
+                if target_1 == target_2 or target_1 in target_2.parents:
+                    raise BlueError(
+                        f"Target folder of '{folder_1.source_path}' overlaps with "
+                        f"target folder of '{folder_2.source_path}'."
+                    )
 
 
 class Settings:
