@@ -741,8 +741,10 @@ class BlueBackup:
             if self.mode is Mode.COLLECT:
                 # Keep a log file for each source folder.
                 # Log files are appended to, so they will keep growing.
-                self.log_file = backup_target_path.with_suffix(".log")
-                self.log_file.local.parent.mkdir(exist_ok=True, parents=True)
+                self.log_file = None  # Disable logging of the mkdir command.
+                log_file = backup_target_path.with_suffix(".log")
+                self._run("/usr/bin/mkdir", "--parents", log_file.local.parent)
+                self.log_file = log_file  # Enable logging again.
 
             rsync_folder_command.append(
                 f"--log-file={self.log_file}"

@@ -537,6 +537,62 @@ def test_collect_mode(
         assert file_path.stat().st_mode & 0o777 == 0o707
 
 
+def test_collect_mode_remote(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test backup collection mode."""
+    shutil.copytree("tests/data-to-backup", tmp_path / "data-to-backup")
+    collect_path = tmp_path / "collect"
+    collect_path.mkdir()
+    toml_file = tmp_path / "blue-collect.toml"
+    with toml_file.open("w") as tfile:
+        tfile.write(
+            "target-location='127.0.0.1:{TOML_FOLDER}/collect'\n"
+            "[backup-folders]\n"
+            "'{TOML_FOLDER}/data-to-backup' = {target='local'}\n"
+            "'127.0.0.1:{TOML_FOLDER}/data-to-backup' = {target='remote'}\n"
+        )
+    with pytest.raises(SystemExit, match="1"):
+        blue_backup.main(str(toml_file), "--first-time")
+    captured = capsys.readouterr()
+    assert captured.err == "--first-time cannot be specified in collect mode.\n"
+
+    blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    assert (
+        captured.err ==
+        f"    Errors in rsync from: 127.0.0.1:{tmp_path}/data-to-backup/ to: remote\n"
+        "    The source and destination cannot both be remote.\n"
+        "    rsync error: syntax or usage error (code 1) at main.c(1428) "
+        "[Receiver=3.2.7]\n"
+    )
+    assert captured.out.startswith(
+        f"Backup collect target: 127.0.0.1:{collect_path} at 1999-12-25 00:00:00+00:00"
+    ), captured.out
+    assert not (collect_path / "blue-backup.log").exists()
+    assert (collect_path / "local").exists()
+    with (collect_path / "local.log").open("r") as log:
+        log_lines = log.readlines()
+        assert len(log_lines) == 7
+        assert "f+++++++++ file-1.txt" in "".join(log_lines)
+    assert not (collect_path / "remote").exists()
+    with (collect_path / "remote.log").open("r") as log:
+        log_lines = log.readlines()
+        assert "The source and destination cannot both be remote." in "".join(log_lines)
+
+    # Second run of collection mode.
+    blue_backup.main(str(toml_file))
+    captured = capsys.readouterr()
+    with (collect_path / "local.log").open("r") as log:
+        log_lines = log.readlines()
+        assert len(log_lines) == 11
+        # file-1.txt shows up in the log of the first run:
+        assert "f+++++++++ file-1.txt" in "".join(log_lines[:7])
+        # file-1.txt does not shows up in the log of the second run:
+        assert "f+++++++++ file-1.txt" not in "".join(log_lines[7:])
+
+
 def test_connection_class(monkeypatch: pytest.MonkeyPatch) -> None:
     """Direct tests of the Connection class."""
     # Test connecting to non-existing host name:
