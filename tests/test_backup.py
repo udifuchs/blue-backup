@@ -681,3 +681,10 @@ def test_main_entry_point(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "error: the following arguments are required: toml_config" in captured.err
+
+    monkeypatch.setattr(sys, "argv", ["", "--version"])
+    with pytest.raises(SystemExit, match="0"):
+        runpy.run_module("blue_backup", run_name="__main__", alter_sys=True)
+    captured = capsys.readouterr()
+    assert captured.out == f"blue-backup {blue_backup.VERSION}\n"
+    assert captured.err == ""

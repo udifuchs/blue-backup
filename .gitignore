@@ -1,5 +1,8 @@
 # python cache:
 __pycache__
+# setuptools:
+/blue_backup.egg-info/
+/build/
 # tox working folder:
 /.tox/
 # coverage data file:

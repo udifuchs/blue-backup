@@ -37,6 +37,7 @@ try:
 except ModuleNotFoundError:
     pass  # Local backups still work even without paramiko.
 
+VERSION = "1.0"
 RSYNC_TIMEOUT = 60  # rsync maximum I/O timeout in seconds.
 DAILY_KEEP = 20  # Number of daily backups to keep during purge.
 
@@ -431,10 +432,13 @@ class Settings:
     def __init__(self, *args: str) -> None:
         parser = argparse.ArgumentParser()
         parser.add_argument("toml_config")
+        parser.add_argument(
+            "--version", action="version", version=f"blue-backup {VERSION}"
+        )
         parser.add_argument("--first-time", action="store_true")
         parser.add_argument("--dry-run", action="store_true")
         parser.add_argument("--verbose", action="store_true")
-        parser.parse_args(args, namespace=self)
+        parser.parse_args(None if len(args) == 0 else args, namespace=self)
 
 
 class Mode(enum.Enum):
@@ -871,4 +875,4 @@ def main(*args: str) -> None:
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:])
+    main()
