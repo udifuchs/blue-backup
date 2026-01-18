@@ -802,7 +802,6 @@ class BlueBackup:
                 else:
                     self._print_output(f"Delete {folder_list[0]}")
                     self._run("/usr/bin/rm", "-r", folder_list[0])
-                # self._run("/usr/bin/rm", folder_list[0].with_suffix(".log"))
             except ProcessError as ex:
                 self._print_error(str(ex))
             folder_list.pop(0)
