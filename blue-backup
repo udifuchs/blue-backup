@@ -17,7 +17,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Iterator
-from typing import BinaryIO, Dict, Literal, Sequence, cast
+from typing import BinaryIO, Dict, List, Literal, Sequence, cast
 
 if sys.version_info >= (3, 11):
     from typing import Self
@@ -249,10 +249,16 @@ class Path(pathlib.Path):
         return str(self / "_")[:-1]
 
 
-class TOMLDict(Dict[str, object]):
+TOMLValue: TypeAlias = """(
+    int | float | str | bool | list[TOMLValue] | dict[str, TOMLValue] |
+    datetime.datetime | datetime.date | datetime.time
+)"""
+
+
+class TOMLDict(Dict[str, TOMLValue]):
     """A python dict holding TOML table."""
 
-    def __init__(self, toml_dict: dict[str, object], name: str) -> None:
+    def __init__(self, toml_dict: dict[str, TOMLValue], name: str) -> None:
         self.name = name
         super().__init__(toml_dict)
 
@@ -288,7 +294,7 @@ class TOMLDict(Dict[str, object]):
             isinstance(value, list) and
             all(isinstance(sub_value, str) for sub_value in value)
         ):
-            return value
+            return cast(List[str], value)
         raise BlueError(
             f"Expected array of strings for '{name}' in {self.name} got: {value}"
         )
