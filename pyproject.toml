@@ -35,6 +35,7 @@ pydocstyle.convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
 "blue-backup" = [
+    "SIM105",  # Use `contextlib.suppress(ModuleNotFoundError)` instead of `try`-`except`-`pass`
     "SLF001",  # Private member accessed: `_flavour`
 ]
 

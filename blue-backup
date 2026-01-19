@@ -32,7 +32,10 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as tomllib
 
-import paramiko
+try:
+    import paramiko
+except ModuleNotFoundError:
+    pass  # Local backups still work even without paramiko.
 
 RSYNC_TIMEOUT = 60  # rsync maximum I/O timeout in seconds.
 DAILY_KEEP = 20  # Number of daily backups to keep during purge.
@@ -119,6 +122,10 @@ class Connection:
         if hostname is None:
             return
 
+        if "paramiko" not in sys.modules:
+            raise BlueError(
+                f"Accessing remote host {address} requires the paramiko package."
+            )
         self.ssh = paramiko.SSHClient()
         self.ssh.load_system_host_keys()
         password = None
@@ -146,16 +153,25 @@ class Connection:
             del password
         self.sftp = self.ssh.open_sftp()
 
-    def iterdir_attr(self, path: pathlib.Path) -> Iterator[paramiko.SFTPAttributes]:
+    @dataclasses.dataclass
+    class FileAttributes:
+        """File name and attributes returned from iterdir_attr()."""
+        filename: str
+        st_mode: int | None
+
+    def iterdir_attr(self, path: pathlib.Path) -> Iterator[Connection.FileAttributes]:
         """Yield SFTPAttributes objects of the folder content."""
         try:
             if self.local:
                 for subpath in path.iterdir():
-                    yield paramiko.SFTPAttributes.from_stat(
-                        subpath.stat(), subpath.name
+                    yield Connection.FileAttributes(
+                        subpath.name, subpath.stat().st_mode
                     )
             else:
-                yield from self.sftp.listdir_attr(str(path))
+                for file_attr in self.sftp.listdir_attr(str(path)):
+                    yield Connection.FileAttributes(
+                        file_attr.filename, file_attr.st_mode
+                    )
         except OSError as ex:
             raise BlueError(str(ex)) from None
 
@@ -467,7 +483,7 @@ class BlueBackup:
             try:
                 with self.conn.open(self.log_file.local, mode="ab") as log_file:
                     log_file.write(f"{text}\n".encode())
-            except (OSError, paramiko.SSHException) as ex:
+            except OSError as ex:
                 if str(self.log_file) in str(ex):
                     raise BlueError(f"Error writing to log: {ex}") from ex
                 raise BlueError(f"Error writing to log '{self.log_file}': {ex}") from ex
