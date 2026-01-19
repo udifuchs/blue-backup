@@ -8,12 +8,12 @@ requires-python = ">=3.8"
 
 [tool.mypy]
 # blue-backup is read through the tests/blue_backup.py symbolic link.
-files = ["tests"]
+files = [ "blue-backup", "tests" ]
 strict = true
 python_version = "3.12"
 
 [tool.ruff]
-include = ["blue-backup", "tests/test_*.py"]
+include = ["blue-backup", "tests/*.py"]
 
 [tool.ruff.lint]
 select = ["ALL"]
@@ -52,12 +52,12 @@ disable = [
     "too-few-public-methods",
     # BlueBackup: Too many instance attributes (9/7)
     "too-many-instance-attributes",
-    # tests/test_backup.py: Too many lines in module (1006/1000)
-    "too-many-lines",
     # Module name "blue-backup" doesn't conform to snake_case naming style
     "invalid-name",
     # Import "import paramiko" should be placed at the top of the module
     "wrong-import-position",
     # Access to a protected member _flavour of a client class
     "protected-access",
+    # Similar lines in 2 files
+    "duplicate-code",
 ]

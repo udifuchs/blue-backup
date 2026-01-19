@@ -1,4 +1,4 @@
-"""Test functionality of blue-backup."""
+"""Test blue-backup when paramiko package is missing."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ import sys
 
 import pytest
 
-# import test/blue_backup.py which is a softlink to blue-backup:
-from . import blue_backup
+# import blue_backup.py which is a softlink to blue-backup:
+import blue_backup
 
 
 def test_local(
