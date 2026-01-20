@@ -267,6 +267,6 @@ There are two special requirements for running tests:
 
 History
 -------
-#### 1.0.0 (2026-01-??)
+#### 1.0.0 (2026-01-19)
 
 * Initial release.
