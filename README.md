@@ -19,9 +19,9 @@ The main difference is that blue-backup labels snapshots by their dates instead 
 
 blue-backup supports three modes of operation:
 
-- [Snapshot backups](#snapshot-mode)
-- [Collecting backups to a central server](#collect-mode)
-- [Off-site secondary backups](#offsite-mode)
+- [Snapshot backups](#snapshot-backups)
+- [Collecting backups to a central server](#collecting-backups-to-a-central-server)
+- [Off-site secondary backups](#off-site-secondary-backups)
 
 Installation
 ------------
@@ -44,7 +44,7 @@ On Debian/Ubuntu these python packages can be installed using:
 apt install python3-paramiko python3-tomli
 ```
 
-Snapshot backups {#snapshot-mode}
+Snapshot backups
 ----------------
 
 Setting up a snapshot backup requires a TOML configuration file.
@@ -153,7 +153,7 @@ Older daily backups are purged.
 Monthly backups are never purged.
 It is your responsibility to decide when to remove older monthly backups.
 
-Collecting backups to a central server {#collect-mode}
+Collecting backups to a central server
 --------------------------------------
 blue-backup's collection mode is used to synchronize files from several remote computers to a central server.
 Strictly speaking, this mode by itself is not a backup.
@@ -186,7 +186,7 @@ $ blue-backup blue-collect.toml
 ```
 There is no need to specify the `--first-time` option.
 
-Off-site secondary backups {#offsite-mode}
+Off-site secondary backups
 --------------------------
 A good backup policy is to have at least two backup copies in two physically distinct locations.
 This is what the offsite mode is for.
