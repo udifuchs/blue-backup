@@ -199,7 +199,11 @@ class Connection:
             raise BlueError(f"File '{filepath}' must be opened in binary mode")
         if self.local:
             return filepath.open(mode=mode)
-        sftp_file = self.sftp.file(str(filepath), mode)
+        try:
+            sftp_file = self.sftp.file(str(filepath), mode)
+        except paramiko.SSHException as ex:
+            # Caller cannot capture paramiko exception since it might not be installed.
+            raise ConnectionError(str(ex)) from ex
         return cast(BinaryIO, sftp_file)
 
     def stat(self, filepath: pathlib.Path) -> os.stat_result:

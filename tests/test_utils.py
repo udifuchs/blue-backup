@@ -71,6 +71,22 @@ def test_connection_class(monkeypatch: pytest.MonkeyPatch) -> None:
         conn.open(pathlib.Path("/no-such-file"), "rb")
     assert str(exc_info.value) == "[Errno 2] No such file"
 
+    # Test dropped connection
+    conn = blue_backup.Connection(address="127.0.0.1")
+    # First have a successful file access:
+    conn.open(pathlib.Path(__file__), mode="rb")
+
+    def mock_read_packet() -> None:
+        raise EOFError("Mocked 'Server connection dropped'")
+
+    monkeypatch.setattr(conn.sftp, "_read_packet", mock_read_packet)
+    with pytest.raises(ConnectionError) as os_exc_info:
+        conn.open(pathlib.Path(__file__), mode="rb")
+    assert (
+        str(os_exc_info.value) ==
+        "Server connection dropped: Mocked 'Server connection dropped'"
+    )
+
 
 def test_lock_file(
     tmp_path: pathlib.Path,
